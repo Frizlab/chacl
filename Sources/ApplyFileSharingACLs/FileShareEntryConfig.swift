@@ -81,7 +81,7 @@ struct FileShareEntryConfig {
 				throw NSError(domain: "main", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid input line (cannot read path) ——— \(line)"])
 			}
 			let path = curString! as String
-			entries.append(FileShareEntryConfig(url: URL(fileURLWithPath: path), permissions: permissions))
+			entries.append(FileShareEntryConfig(absolutePath: URL(fileURLWithPath: path).absoluteURL.path, permissions: permissions))
 		} while true
 		
 		return entries
@@ -120,7 +120,7 @@ struct FileShareEntryConfig {
 		
 	}
 	
-	var url: URL
+	var absolutePath: String
 	var permissions: [Permission]
 	
 }
