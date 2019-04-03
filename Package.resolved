@@ -3,11 +3,11 @@
     "pins": [
       {
         "package": "SimpleStream",
-        "repositoryURL": "https://github.com/Frizlab/SimpleStream",
+        "repositoryURL": "https://github.com/Frizlab/SimpleStream.git",
         "state": {
           "branch": null,
-          "revision": "026916c6e79e6002f042b7e75f754861ad14f38f",
-          "version": "1.0.0"
+          "revision": "75c0807d74d1235bb4815719d7d7a94b203bc336",
+          "version": "1.0.1"
         }
       }
     ]
