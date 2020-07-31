@@ -19,7 +19,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		discussion: """
 		The config file format is as follow:
 		   One PATH per line (if a path is present more than once, the latest entry will win)
-		   Each line has the following format: `[u|g]:[r|rw]:USER_OR_GROUP_NAME(:[u|g]:[r|rw]:USER_OR_GROUP_NAME)*::PATH`
+		   Each line must have the following format: `[u|g]:[r|rw]:USER_OR_GROUP_NAME(:[u|g]:[r|rw]:USER_OR_GROUP_NAME)*::PATH`
 		""")
 	
 	@Flag
