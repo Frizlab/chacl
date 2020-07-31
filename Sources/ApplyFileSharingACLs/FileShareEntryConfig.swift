@@ -18,14 +18,14 @@ struct FileShareEntryConfig {
 		stream.open(); defer {stream.close()}
 		
 		var entries = [FileShareEntryConfig]()
-		let simpleStream = SimpleInputStream(stream: stream, bufferSize: 1*1024*1024 /* 1MiB */, streamReadSizeLimit: nil)
+		let simpleStream = SimpleInputStream(stream: stream, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, streamReadSizeLimit: nil)
 		repeat {
 			let lineData: Data
 			do {
-				lineData = try simpleStream.readData(upToDelimiters: [Data(base64Encoded: "Cg==")!], matchingMode: .anyMatchWins, includeDelimiter: true, alwaysCopyBytes: false)
+				lineData = try simpleStream.readData(upTo: [Data(base64Encoded: "Cg==")!], matchingMode: .anyMatchWins, includeDelimiter: true).data
 			} catch SimpleStreamError.delimitersNotFound {
 				/* If we have a delimitersNotFound error, we still want to read the text remaining. */
-				lineData = try simpleStream.readData(upToDelimiters: [], matchingMode: .anyMatchWins, includeDelimiter: false, alwaysCopyBytes: false)
+				lineData = try simpleStream.readData(upTo: [], matchingMode: .anyMatchWins, includeDelimiter: false).data
 			} catch {
 				throw error
 			}

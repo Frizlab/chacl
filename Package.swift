@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
 	name: "ApplyFileSharingACLs",
 	dependencies: [
-		.package(url: "https://github.com/Frizlab/SimpleStream.git", from: "1.0.0")
+		.package(url: "https://github.com/Frizlab/SimpleStream.git", from: "2.1.0")
 	],
 	targets: [
 		.target(name: "ApplyFileSharingACLs", dependencies: ["SimpleStream"])
