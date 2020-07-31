@@ -9,7 +9,7 @@ import Foundation
 
 
 
-public struct SimpleError {
+public struct SimpleError : Error {
 	
 	public var message: String
 	

@@ -49,7 +49,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 				/* Getting ACL entry tag */
 				var currentACLEntryTagType = ACL_UNDEFINED_TAG
 				guard acl_get_tag_type(currentACLEntry, &currentACLEntryTagType) == 0 else {
-					throw NSError(domain: "main", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot get ACL Entry Tag Type"])
+					throw SimpleError(message: "Cannot get ACL Entry Tag Type")
 				}
 				
 //				ACL_EXTENDED_ALLOW || ACL_EXTENDED_DENY
