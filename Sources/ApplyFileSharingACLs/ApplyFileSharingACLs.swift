@@ -19,7 +19,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		discussion: """
 		The config file format is as follow:
 		   One PATH per line (if a path is present more than once, the latest entry will win)
-		   Each line must have the following format: `[u|g]:[r|rw]:USER_OR_GROUP_NAME(:[u|g]:[r|rw]:USER_OR_GROUP_NAME)*::PATH`
+		   Each line must have the following format: `([u|g]:[r|rw]:USER_OR_GROUP_NAME:)*:PATH`
 		""")
 	
 	@Flag
@@ -30,11 +30,16 @@ struct ApplyFileSharingACLs : ParsableCommand {
 	
 	func run() throws {
 		/* Parsing the config */
-		let configs = try FileShareEntryConfig.parse(configFile: CommandLine.arguments[1])
-
-		/* First step is to remove any custom ACL from all of the files in the paths
-		 * given in the config (except for _spotlight’s). */
-		for config in configs {
+		let configs = try FileShareEntryConfig.parse(configFile: configFilePath)
+		
+		/* First step is to remove any custom ACL from all of the files in the
+		 * paths given in the config (except for _spotlight’s).
+		 *
+		 * We want to treat longer paths at the end, otherwise we could overwrite
+		 * embeded folders configuration when applying conf on a parent folder.
+		 * Because the paths are absolute (and dropped of all the .. components),
+		 * treating longer paths at the end works. */
+		for config in configs.sorted(by: { $0.absolutePath.count < $1.absolutePath.count }) {
 			#warning("TODO")
 			let path = config.absolutePath
 			guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else {continue /* No ACL for this file/folder */}

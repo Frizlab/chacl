@@ -37,7 +37,6 @@ struct FileShareEntryConfig {
 			guard line.first != "#" else {continue} /* Removing comments */
 			guard line.count > 0 else {continue} /* Removing empty (whitespace-only) lines */
 			
-			var foundEnd = false
 			var curString: NSString?
 			let scanner = Scanner(string: line)
 			scanner.charactersToBeSkipped = CharacterSet()
@@ -45,7 +44,7 @@ struct FileShareEntryConfig {
 			var permissions = [Permission]()
 			
 			/* Getting permission destination */
-			repeat {
+			while !scanner.scanString(":", into: nil) {
 				guard scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"), into: &curString), scanner.scanString(":", into: nil) else {
 					throw SimpleError(message: "Invalid input line (cannot read permission destination) ——— \(line)")
 				}
@@ -73,9 +72,7 @@ struct FileShareEntryConfig {
 					throw SimpleError(message: "Invalid input line (invalid permission destination) ——— \(line)")
 				}
 				permissions.append(Permission(destination: destination, rights: rights))
-				
-				foundEnd = scanner.scanString(":", into: nil)
-			} while !foundEnd
+			}
 			
 			guard scanner.scanUpToCharacters(from: CharacterSet(), into: &curString) else {
 				throw SimpleError(message: "Invalid input line (cannot read path) ——— \(line)")
