@@ -110,11 +110,11 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			/* The man of acl_get_qualifier says if the tag type is
 			 * ACL_EXTENDED_ALLOW or ACL_EXTENDED_DENY, the returned pointer will
 			 * point to a guid_t */
-			guard let userOrGroupGUIDLowPointer = acl_get_qualifier(currentACLEntry)?.assumingMemoryBound(to: guid_t.self) else {
+			guard let userOrGroupGUIDPointer = acl_get_qualifier(currentACLEntry)?.assumingMemoryBound(to: guid_t.self) else {
 				throw SimpleError(message: "Cannot fetch userOrGroupGUID GUID for path \(path)")
 			}
-			defer {acl_free(userOrGroupGUIDLowPointer)}
-			let userOrGroupGUID = try guid_tToUUID(userOrGroupGUIDLowPointer.pointee)
+			defer {acl_free(userOrGroupGUIDPointer)}
+			let userOrGroupGUID = try guid_tToUUID(userOrGroupGUIDPointer.pointee)
 			guard !whitelist.contains(userOrGroupGUID) else {
 				continue
 			}
