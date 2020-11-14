@@ -33,8 +33,21 @@ struct ApplyFileSharingACLs : ParsableCommand {
 	var configFilePath: String
 	
 	func run() throws {
-		guard KAUTH_GUID_SIZE == 16 else {
-			throw SimpleError(message: "The GUID of a user has not the expected size (thus is probably not a UUID), so we can’t run. At all. Bye.")
+		/* Commented because the compiler knows KAUTH_GUID_SIZE == 16 at compile
+		 * time and thus complains w/ a warning the else part of the guard will
+		 * never be executed…
+		 * Instead we do the opposite, and (hopefully) trigger a warning if
+		 * KAUTH_GUID_SIZE is not 16! I don’t know if a static check from the
+		 * compiler is possible, but it does not seem to be. (It is technically
+		 * possible; KAUTH_GUID_SIZE is a #define, but I don’t think it’s
+		 * implemented in the compiler.)
+		 * This is indeed not the same thing! But I don’t want a warning in my
+		 * code, and realistically KAUTH_GUID_SIZE will never be != 16. */
+//		guard KAUTH_GUID_SIZE == 16 else {
+//			throw SimpleError(message: "The auth GUID has not the expected size (thus is probably not a UUID), so we can’t run. At all. Bye.")
+//		}
+		if KAUTH_GUID_SIZE == 16 {
+			_ = "not an empty if! The auth GUID has not the expected size (thus is probably not a UUID), so you’ll probably run into weird issues…"
 		}
 		
 		/* Parsing the config */
