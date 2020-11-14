@@ -4,6 +4,9 @@ import PackageDescription
 
 let package = Package(
 	name: "ApplyFileSharingACLs",
+	platforms: [
+		.macOS(.v10_11)
+	],
 	products: [
 		.executable(name: "ApplyFileSharingACLs", targets: ["ApplyFileSharingACLs"])
 	],
