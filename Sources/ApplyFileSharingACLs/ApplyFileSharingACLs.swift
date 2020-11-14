@@ -103,6 +103,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		}
 		defer {acl_free(UnsafeMutableRawPointer(acl))}
 		
+		var modified = false
 		var currentACLEntry: acl_entry_t?
 		var currentACLEntryId = ACL_FIRST_ENTRY.rawValue
 		/* The only error possible is invalid entry id (either completely invalid
@@ -148,7 +149,11 @@ struct ApplyFileSharingACLs : ParsableCommand {
 //					default: (/* An error occurred */)
 //				}
 //			}
+			
+			acl_delete_entry(acl, currentACLEntry)
+			modified = true
 		}
+		if modified {acl_set_link_np(path, ACL_TYPE_EXTENDED, acl)}
 	}
 	
 	private func guid_tToUUID(_ guid: guid_t) throws -> UUID {
