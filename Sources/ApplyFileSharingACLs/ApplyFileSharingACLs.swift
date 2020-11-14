@@ -118,7 +118,21 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			guard !whitelist.contains(userOrGroupGUID) else {
 				continue
 			}
-			print(userOrGroupGUID)
+			
+			/* We do not need to know what are the permission on this ACL, we will
+			 * just drop it. */
+//			var currentACLEntryPermset: acl_permset_t?
+//			guard acl_get_permset(currentACLEntry, &currentACLEntryPermset) == 0 else {
+//				throw SimpleError(message: "Cannot get ACL Entry Permset")
+//			}
+//			for perm in [ACL_READ_DATA, ACL_LIST_DIRECTORY, ...] {
+//				let ret = acl_get_perm_np(currentACLEntryPermset, ACL_READ_DATA);
+//				switch ret {
+//					case 0: (/* Permission is not in the permset */)
+//					case 1: (/* Permission is in the permset */)
+//					default: (/* An error occurred */)
+//				}
+//			}
 		}
 	}
 	
