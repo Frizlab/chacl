@@ -76,7 +76,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			guard !treated.contains(where: { path.hasPrefix($0) }) else {continue}
 			
 			if verbose {
-				print("Removing all ACLs recursively in all files and folders in \(path)")
+				print((dryRun ? "** DRY RUN ** " : "") + "Removing all ACLs recursively in all files and folders in \(path)")
 			}
 			treated.insert(path)
 			let url = URL(fileURLWithPath: path, isDirectory: true)
@@ -153,7 +153,14 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			acl_delete_entry(acl, currentACLEntry)
 			modified = true
 		}
-		if modified {acl_set_link_np(path, ACL_TYPE_EXTENDED, acl)}
+		if modified {
+			if verbose || dryRun {
+				print((dryRun ? "** DRY RUN ** " : "") + "Removed ACLs from file \(path)")
+			}
+			if !dryRun {
+				acl_set_link_np(path, ACL_TYPE_EXTENDED, acl)
+			}
+		}
 	}
 	
 	private func guid_tToUUID(_ guid: guid_t) throws -> UUID {
