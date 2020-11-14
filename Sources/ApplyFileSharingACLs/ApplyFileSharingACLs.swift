@@ -82,7 +82,10 @@ struct ApplyFileSharingACLs : ParsableCommand {
 	
 	private func removeACLs(from url: URL, whitelist: Set<UUID>, dryRun: Bool) throws {
 		let path = url.absoluteURL.path
-		guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else {return /* No ACL for this file or folder */}
+		guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else {
+			if errno == ENOENT {return} /* No ACL for this file or folder */
+			else               {throw SimpleError(message: "Cannot read ACLs for path \(path); got error number \(errno)")}
+		}
 		defer {acl_free(UnsafeMutableRawPointer(acl))}
 		
 		var currentACLEntry: acl_entry_t?
@@ -92,9 +95,8 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		 * We know we’re giving a correct entry id, so if we get an error we have
 		 * reached the latest entry! */
 		while acl_get_entry(acl, currentACLEntryId, &currentACLEntry) == 0 {
-			defer {currentACLEntryId = ACL_NEXT_ENTRY.rawValue}
-			
 			let currentACLEntry = currentACLEntry! /* No error from acl_get_entry: the entry must be filled in and non-nil */
+			defer {currentACLEntryId = ACL_NEXT_ENTRY.rawValue}
 			
 			/* Getting ACL entry tag */
 			var currentACLEntryTagType = ACL_UNDEFINED_TAG
