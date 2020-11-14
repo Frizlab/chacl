@@ -75,7 +75,9 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			let path = config.absolutePath
 			guard !treated.contains(where: { path.hasPrefix($0) }) else {continue}
 			
-			print("Removing all ACLs recursively in all files and folders in \(path)")
+			if verbose {
+				print("Removing all ACLs recursively in all files and folders in \(path)")
+			}
 			treated.insert(path)
 			let url = URL(fileURLWithPath: path, isDirectory: true)
 			
