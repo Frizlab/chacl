@@ -31,7 +31,7 @@ struct FileShareEntryConfig {
 			}
 			guard lineData.count > 0 else {break} /* We've reached the end of the file */
 			
-			guard let line = String(data: lineData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+			guard let line = (String(data: lineData, encoding: .utf8)?.dropLast()).flatMap(String.init) else {
 				throw SimpleError(message: "Cannot read one line in text")
 			}
 			guard line.first != "#" else {continue} /* Removing comments */
