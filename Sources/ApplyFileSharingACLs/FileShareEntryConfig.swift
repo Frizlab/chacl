@@ -41,9 +41,8 @@ struct FileShareEntryConfig {
 			let scanner = Scanner(string: line)
 			scanner.charactersToBeSkipped = CharacterSet()
 			
-			var permissions = [Permission]()
-			
 			/* Getting permission destination */
+			var permissions = [Permission]()
 			while !scanner.scanString(":", into: nil) {
 				guard scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"), into: &curString), scanner.scanString(":", into: nil) else {
 					throw SimpleError(message: "Invalid input line (cannot read permission destination) ——— \(line)")
@@ -78,7 +77,13 @@ struct FileShareEntryConfig {
 				throw SimpleError(message: "Invalid input line (cannot read path) ——— \(line)")
 			}
 			let path = curString! as String
-			entries.append(FileShareEntryConfig(absolutePath: URL(fileURLWithPath: path).absoluteURL.path, permissions: permissions))
+			let absolutePath = URL(fileURLWithPath: path).absoluteURL.path
+			if let idx = entries.firstIndex(where: { $0.absolutePath == absolutePath }) {
+				print("*** warning: entry for path \(absolutePath) found more than once; latest one wins.")
+				entries.remove(at: idx)
+				assert(!entries.contains(where: { $0.absolutePath == absolutePath }))
+			}
+			entries.append(FileShareEntryConfig(absolutePath: absolutePath, permissions: permissions))
 		} while true
 		
 		return entries
