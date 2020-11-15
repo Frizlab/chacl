@@ -47,20 +47,20 @@ struct FileShareEntryConfig {
 					throw SimpleError(message: "Invalid input line (cannot read permission destination) ——— \(line)")
 				}
 				
-				/* Getting permission rights */
-				guard
-					let permissionRightsAsString = scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"))?.trimmingCharacters(in: .whitespacesAndNewlines),
-					scanner.scanString(":") != nil
-				else {
-					throw SimpleError(message: "Invalid input line (cannot read permission rights) ——— \(line)")
-				}
-				
 				/* Getting permission destination group or user name */
 				guard
 					let permissionDestinationGroupOrUserName = scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"))?.trimmingCharacters(in: .whitespacesAndNewlines),
 					scanner.scanString(":") != nil
 				else {
 					throw SimpleError(message: "Invalid input line (cannot read group or user name) ——— \(line)")
+				}
+				
+				/* Getting permission rights */
+				guard
+					let permissionRightsAsString = scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"))?.trimmingCharacters(in: .whitespacesAndNewlines),
+					scanner.scanString(":") != nil
+				else {
+					throw SimpleError(message: "Invalid input line (cannot read permission rights) ——— \(line)")
 				}
 				
 				guard let destination = Permission.Destination.fromString(permissionDestinationAsString, with: permissionDestinationGroupOrUserName) else {
