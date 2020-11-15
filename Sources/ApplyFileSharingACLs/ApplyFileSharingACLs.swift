@@ -12,6 +12,8 @@ import ArgumentParser
 
 
 
+/* Useful: https://opensource.apple.com/source/Libc/Libc-583/include/sys/acl.h.auto.html */
+
 struct ApplyFileSharingACLs : ParsableCommand {
 	
 	static var configuration = CommandConfiguration(
@@ -52,8 +54,15 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		
 		let fm = FileManager.default
 		
+		let odSession = ODSession.default()
+		let odNode = try ODNode(session: odSession, type: ODNodeType(kODNodeTypeAuthentication))
+		let spotlightRecord = try odNode.record(withRecordType: kODRecordTypeUsers, name: "spotlight", attributes: [kODAttributeTypeGUID])
+		guard let spotlightGUID = try (spotlightRecord.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) }) else {
+			throw SimpleError(message: "Zero or more than one value, or invalid UUID string for attribute kODAttributeTypeGUID for the spotlight user; cannot continue.")
+		}
+		
 		/* Parsing the config */
-		let configs: [FileShareEntryConfig]
+		let configs: [PreprocessedFileShareEntryConfig]
 		do {
 			guard let stream = InputStream(fileAtPath: configFilePath != "-" ? configFilePath : "/dev/stdin") else {
 				throw SimpleError(message: "Cannot open file")
@@ -63,13 +72,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			else                     {baseURLForPaths = URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true)}
 			stream.open(); defer {stream.close()}
 			configs = try FileShareEntryConfig.parse(config: stream, baseURLForPaths: baseURLForPaths, verbose: verbose)
-		}
-		
-		let odSession = ODSession.default()
-		let odNode = try ODNode(session: odSession, type: ODNodeType(kODNodeTypeAuthentication))
-		let spotlightRecord = try odNode.record(withRecordType: kODRecordTypeUsers, name: "spotlight", attributes: nil)
-		guard let spotlightGUID = try (spotlightRecord.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) }) else {
-			throw SimpleError(message: "Zero or more than one value, or invalid UUID string for attribute kODAttributeTypeGUID for the spotlight user; cannot continue.")
+				.map{ try PreprocessedFileShareEntryConfig(config: $0, odNode: odNode) }
 		}
 		
 		/* First step is to remove any custom ACL from all of the files in the
@@ -93,14 +96,75 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			
 			/* Let’s create a directory enumerator to enumerate all the files and
 			 * folder in the path being treated. */
-			guard let enumerator = fm.enumerator(atPath: path) else {
-				throw SimpleError(message: "Cannot get directory enumerator for path \(path)")
+			guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) else {
+				throw SimpleError(message: "Cannot get directory enumerator for url \(url)")
 			}
 			
 			/* Actually removing all the ACLs except Spotlight’s */
 			try removeACLs(from: url, whitelist: [spotlightGUID], dryRun: dryRun) /* We must first call for the current path itself: the directory enumerator does not output the source. */
-			while let subPath = enumerator.nextObject() as! String? {
-				try removeACLs(from: URL(fileURLWithPath: subPath, relativeTo: url), whitelist: [spotlightGUID], dryRun: dryRun)
+			while let subURL = enumerator.nextObject() as! URL? {
+				try removeACLs(from: subURL, whitelist: [spotlightGUID], dryRun: dryRun)
+			}
+		}
+		
+		/* Then we add the ACLs required from the config.
+		 * We also treat longer path at the end so the parents are treated first.
+		 * Note: This algorithm is not efficient; we should resove the final ACLs
+		 *       needed and apply them! However it’s simpler that way :-) */
+		for config in configs.sorted(by: { $0.absolutePath.count < $1.absolutePath.count }) {
+			let path = config.absolutePath
+			
+			if verbose {
+				print((dryRun ? "** DRY RUN ** " : "") + "Adding ACLs recursively in all files and folders in \(path)")
+			}
+			let url = URL(fileURLWithPath: path, isDirectory: true)
+			
+			/* Let’s create a directory enumerator to enumerate all the files and
+			 * folder in the path being treated. */
+			guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileResourceTypeKey]) else {
+				throw SimpleError(message: "Cannot get directory enumerator for path \(path)")
+			}
+			
+			/* Actually adding the ACLs */
+			try addACLs(to: url, conf: config, fileManager: fm, isRoot: true, dryRun: dryRun)
+			while let subURL = enumerator.nextObject() as! URL? {
+				try addACLs(to: subURL, conf: config, fileManager: fm, isRoot: false, dryRun: dryRun)
+			}
+		}
+	}
+	
+	private func addACLs(to url: URL, conf: PreprocessedFileShareEntryConfig, fileManager fm: FileManager, isRoot: Bool, dryRun: Bool) throws {
+		let path = url.absoluteURL.path
+		guard let fileResourceType = try url.resourceValues(forKeys: [.fileResourceTypeKey]).fileResourceType else {
+			throw SimpleError(message: "Cannot get file type of URL \(url)")
+		}
+		guard fileResourceType == .directory || fileResourceType == .regular else {
+			print("ignored non-regular and non-directory path \(path)")
+			return
+		}
+		
+		let acl: acl_t!
+		if let currentACL = acl_get_link_np(path, ACL_TYPE_EXTENDED) {
+			acl = currentACL
+		} else {
+			guard errno == ENOENT else {throw SimpleError(message: "Cannot read ACLs for path \(path); got error number \(errno)")}
+			acl = acl_init(conf.permCount)
+		}
+		defer {acl_free(UnsafeMutableRawPointer(acl))}
+		
+		let modified: Bool
+		let isDir = fileResourceType == .directory
+		if !isDir {modified = try conf.addFileACLEntries(to: acl, isRoot: isRoot)}
+		else      {modified = try conf.addFolderACLEntries(to: acl, isRoot: isRoot)}
+		
+		if modified {
+			if verbose || dryRun {
+				print((dryRun ? "** DRY RUN ** " : "") + "Adding ACLs to file \(path)")
+			}
+			if !dryRun {
+				guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
+					throw SimpleError(message: "cannot set ACL on file at path \(path)")
+				}
 			}
 		}
 	}
@@ -140,7 +204,9 @@ struct ApplyFileSharingACLs : ParsableCommand {
 				throw SimpleError(message: "Cannot fetch userOrGroupGUID GUID for path \(path)")
 			}
 			defer {acl_free(userOrGroupGUIDPointer)}
-			let userOrGroupGUID = try guid_tToUUID(userOrGroupGUIDPointer.pointee)
+			guard let userOrGroupGUID = UUID(guid: userOrGroupGUIDPointer.pointee) else {
+				throw SimpleError(message: "Cannot convert guid_t to UUID (weird though)")
+			}
 			guard !whitelist.contains(userOrGroupGUID) else {
 				continue
 			}
@@ -160,6 +226,8 @@ struct ApplyFileSharingACLs : ParsableCommand {
 //				}
 //			}
 			
+			/* Source code https://opensource.apple.com/source/Libc/Libc-825.26/posix1e/acl_entry.c.auto.html
+			 * confirms it is valid to get next entry when we have deleted one. */
 			acl_delete_entry(acl, currentACLEntry)
 			modified = true
 		}
@@ -168,24 +236,191 @@ struct ApplyFileSharingACLs : ParsableCommand {
 				print((dryRun ? "** DRY RUN ** " : "") + "Removed ACLs from file \(path)")
 			}
 			if !dryRun {
-				acl_set_link_np(path, ACL_TYPE_EXTENDED, acl)
+				guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
+					throw SimpleError(message: "cannot set ACL on file at path \(path)")
+				}
 			}
 		}
 	}
 	
-	private func guid_tToUUID(_ guid: guid_t) throws -> UUID {
-		guard let cfUUID = CFUUIDCreateWithBytes(nil, guid.g_guid.0, guid.g_guid.1, guid.g_guid.2, guid.g_guid.3, guid.g_guid.4, guid.g_guid.5, guid.g_guid.6, guid.g_guid.7, guid.g_guid.8, guid.g_guid.9, guid.g_guid.10, guid.g_guid.11, guid.g_guid.12, guid.g_guid.13, guid.g_guid.14, guid.g_guid.15) else {
-			throw SimpleError(message: "Cannot convert guid_t to CFUUID (this is weird though)")
+	
+	/* Must be a class to have a deinit, because we keep refs to acl_t pointers
+	 * and need to free them when we are dealloc’d. */
+	private class PreprocessedFileShareEntryConfig {
+		
+		var absolutePath: String
+		var permCount: Int32
+		
+		init(config: FileShareEntryConfig, odNode: ODNode) throws {
+			absolutePath = config.absolutePath
+			permCount = Int32(config.permissions.count)
+			
+			refACLForFile = acl_init(permCount /* This is a minimum; we could put 0 here. */)
+			refACLForFolder = acl_init(permCount /* This is a minimum; we could put 0 here. */)
+			
+			for perm in config.permissions {
+				var aclEntryForFile, aclEntryForFolder: acl_entry_t?
+				guard acl_create_entry(&refACLForFile, &aclEntryForFile) == 0, acl_create_entry(&refACLForFolder, &aclEntryForFolder) == 0 else {
+					throw SimpleError(message: "cannot create ACL entry while init’ing a PreprocessedFileShareEntryConfig")
+				}
+				
+				guard acl_set_tag_type(aclEntryForFile, ACL_EXTENDED_ALLOW) == 0, acl_set_tag_type(aclEntryForFolder, ACL_EXTENDED_ALLOW) == 0 else {
+					throw SimpleError(message: "cannot set tag type of ACL entry while init’ing a PreprocessedFileShareEntryConfig")
+				}
+				
+				let destRecordType: String
+				let destRecordName: String
+				switch perm.destination {
+					case .user(let username):   destRecordType = kODRecordTypeUsers;  destRecordName = username
+					case .group(let groupname): destRecordType = kODRecordTypeGroups; destRecordName = groupname
+				}
+				let record = try odNode.record(withRecordType: destRecordType, name: destRecordName, attributes: [kODAttributeTypeGUID])
+				guard var guid = try (record.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) })?.guid else {
+					throw SimpleError(message: "zero or more than one value, or invalid UUID string for attribute kODAttributeTypeGUID for permission destination \(perm.destination); cannot continue.")
+				}
+				guard acl_set_qualifier(aclEntryForFile, &guid) == 0, acl_set_qualifier(aclEntryForFolder, &guid) == 0 else {
+					throw SimpleError(message: "cannot set qualifier of ACL entry while init’ing a PreprocessedFileShareEntryConfig")
+				}
+				
+				var aclPermsetForFile, aclPermsetForFolder: acl_permset_t!
+				guard acl_get_permset(aclEntryForFile, &aclPermsetForFile) == 0, acl_get_permset(aclEntryForFolder, &aclPermsetForFolder) == 0 else {
+					throw SimpleError(message: "cannot get ACL entry permset while init’ing a PreprocessedFileShareEntryConfig")
+				}
+				switch perm.rights {
+					case .readwrite:
+						try Self.addPerm(ACL_DELETE, to: aclPermsetForFile)
+						try Self.addPerm(ACL_DELETE, to: aclPermsetForFolder)
+						try Self.addPerm(ACL_WRITE_ATTRIBUTES, to: aclPermsetForFile)
+						try Self.addPerm(ACL_WRITE_ATTRIBUTES, to: aclPermsetForFolder)
+						try Self.addPerm(ACL_WRITE_EXTATTRIBUTES, to: aclPermsetForFile)
+						try Self.addPerm(ACL_WRITE_EXTATTRIBUTES, to: aclPermsetForFolder)
+						
+						try Self.addPerm(ACL_WRITE_DATA, to: aclPermsetForFile)
+						try Self.addPerm(ACL_APPEND_DATA, to: aclPermsetForFile)
+						
+						try Self.addPerm(ACL_ADD_FILE, to: aclPermsetForFolder)
+						try Self.addPerm(ACL_ADD_SUBDIRECTORY, to: aclPermsetForFolder)
+						try Self.addPerm(ACL_DELETE_CHILD, to: aclPermsetForFolder)
+						
+						fallthrough
+						
+					case .readonly:
+						try Self.addPerm(ACL_READ_ATTRIBUTES, to: aclPermsetForFile)
+						try Self.addPerm(ACL_READ_ATTRIBUTES, to: aclPermsetForFolder)
+						try Self.addPerm(ACL_READ_EXTATTRIBUTES, to: aclPermsetForFile)
+						try Self.addPerm(ACL_READ_EXTATTRIBUTES, to: aclPermsetForFolder)
+						
+						try Self.addPerm(ACL_READ_DATA, to: aclPermsetForFile)
+						
+						try Self.addPerm(ACL_LIST_DIRECTORY, to: aclPermsetForFolder)
+						try Self.addPerm(ACL_SEARCH, to: aclPermsetForFolder)
+				}
+				guard acl_set_permset(aclEntryForFile, aclPermsetForFile) == 0, acl_set_permset(aclEntryForFolder, aclPermsetForFolder) == 0 else {
+					throw SimpleError(message: "cannot set ACL entry permset while init’ing a PreprocessedFileShareEntryConfig")
+				}
+				
+				/* We do not set any flag on the files… Note a flagset can be set on
+				 * the ACL and the ACL entry. We only set it on the ACL entry, both
+				 * because it’s what we really want and also because I’m not sure
+				 * what setting on the ACL directly does. */
+				var aclFlagsetForFolder: acl_flagset_t!
+				guard acl_get_flagset_np(aclEntryForFolder.flatMap({ UnsafeMutableRawPointer($0) }), &aclFlagsetForFolder) == 0 else {
+					throw SimpleError(message: "cannot get ACL entry flagset while init’ing a PreprocessedFileShareEntryConfig")
+				}
+				try Self.addFlag(ACL_ENTRY_FILE_INHERIT, to: aclFlagsetForFolder)
+				try Self.addFlag(ACL_ENTRY_DIRECTORY_INHERIT, to: aclFlagsetForFolder)
+				guard acl_set_flagset_np(aclEntryForFolder.flatMap({ UnsafeMutableRawPointer($0) }), aclFlagsetForFolder) == 0 else {
+					throw SimpleError(message: "cannot set ACL entry flagset while init’ing a PreprocessedFileShareEntryConfig")
+				}
+			}
 		}
-		/* CFUUID is not toll-free bridged w/ UUID… So we use the string
-		 * representation like the doc suggests! */
-		guard let str = CFUUIDCreateString(nil, cfUUID) as String? else {
-			throw SimpleError(message: "Cannot convert CFUUID to String (this is weird though)")
+		
+		deinit {
+			acl_free(UnsafeMutableRawPointer(refACLForFile))
+			acl_free(UnsafeMutableRawPointer(refACLForFolder))
 		}
-		guard let uuid = UUID(uuidString: str) else {
-			throw SimpleError(message: "Cannot convert String representation of CFUUID to UUID (this is weird though)")
+		
+		/** Returns `true` if the ACL has been modified. */
+		func addFileACLEntries(to acl: acl_t, isRoot: Bool) throws -> Bool {
+			return try addACLEntries(to: acl, isRoot: isRoot, ref: refACLForFile)
 		}
-		return uuid
+		
+		/** Returns `true` if the ACL has been modified. */
+		func addFolderACLEntries(to acl: acl_t, isRoot: Bool) throws -> Bool {
+			return try addACLEntries(to: acl, isRoot: isRoot, ref: refACLForFolder)
+		}
+		
+		private static func addPerm(_ perm: acl_perm_t, to permset: acl_permset_t) throws {
+			guard acl_add_perm(permset, perm) == 0 else {
+				throw SimpleError(message: "cannot add perm to permset")
+			}
+		}
+		
+		private static func addFlag(_ flag: acl_flag_t, to flagset: acl_flagset_t) throws {
+			guard acl_add_flag_np(flagset, flag) == 0 else {
+				throw SimpleError(message: "cannot add flag to flagset")
+			}
+		}
+		
+		/* Must be implicitely unwrapped because of weird interoperability w/ C. */
+		private var refACLForFile: acl_t!
+		private var refACLForFolder: acl_t!
+		
+		private func addACLEntries(to acl: acl_t, isRoot: Bool, ref: acl_t) throws -> Bool {
+			var modified = false
+			var acl: acl_t! = acl
+			var currentRefACLEntry: acl_entry_t?
+			var currentRefACLEntryId = ACL_FIRST_ENTRY.rawValue
+			while acl_get_entry(ref, currentRefACLEntryId, &currentRefACLEntry) == 0 {
+				let currentRefACLEntry = currentRefACLEntry! /* No error from acl_get_entry: the entry must be filled in and non-nil */
+				defer {currentRefACLEntryId = ACL_NEXT_ENTRY.rawValue}
+				
+				/* Creating a new ACL entry in the destination ACL */
+				var currentACLEntry: acl_entry_t?
+				guard acl_create_entry(&acl, &currentACLEntry) == 0 else {
+					throw SimpleError(message: "cannot create ACL entry while copying ACL entries")
+				}
+				modified = true
+				
+				/* Copying ACL entry tag */
+				var currentRefACLEntryTagType = ACL_UNDEFINED_TAG
+				guard acl_get_tag_type(currentRefACLEntry, &currentRefACLEntryTagType) == 0, acl_set_tag_type(currentACLEntry, currentRefACLEntryTagType) == 0 else {
+					throw SimpleError(message: "cannot copy ACL entry tag type while copying ACL entries")
+				}
+				
+				/* Copying ACL qualifier */
+				guard let qualifer = acl_get_qualifier(currentRefACLEntry) else {
+					throw SimpleError(message: "cannot copy ACL entry qualifier while copying ACL entries")
+				}
+				defer {acl_free(qualifer)}
+				guard acl_set_qualifier(currentACLEntry, qualifer) == 0 else {
+					throw SimpleError(message: "cannot copy ACL entry qualifier while copying ACL entries")
+				}
+				
+				/* Copying ACL permset */
+				var currentRefACLEntryPermset: acl_permset_t?
+				guard acl_get_permset(currentRefACLEntry, &currentRefACLEntryPermset) == 0, acl_set_permset(currentACLEntry, currentRefACLEntryPermset) == 0 else {
+					throw SimpleError(message: "cannot copy ACL entry permset while copying ACL entries")
+				}
+				
+				/* Copying (and modifying if needed) flagset */
+				var currentRefACLEntryFlagset: acl_flagset_t?
+				guard acl_get_flagset_np(UnsafeMutableRawPointer(currentRefACLEntry), &currentRefACLEntryFlagset) == 0 else {
+					throw SimpleError(message: "cannot copy ACL entry flagset while copying ACL entries")
+				}
+				/* We mark the permission as being inherited if needed. Actually
+				 * changes the flagset of the ref ACL, but we do not care because we
+				 * will always set it to the correct value (and we run on 1 thread
+				 * only). */
+				if !isRoot {acl_add_flag_np(currentRefACLEntryFlagset, ACL_ENTRY_INHERITED)}
+				else       {acl_delete_flag_np(currentRefACLEntryFlagset, ACL_ENTRY_INHERITED)}
+				guard acl_set_flagset_np(currentACLEntry.flatMap({ UnsafeMutableRawPointer($0) }), currentRefACLEntryFlagset) == 0 else {
+					throw SimpleError(message: "cannot copy ACL entry flagset while copying ACL entries")
+				}
+			}
+			return modified
+		}
+		
 	}
 	
 }
