@@ -13,7 +13,7 @@ import SimpleStream
 struct FileShareEntryConfig {
 	
 	/** Parses the given config file. If file is "-", will read from stdin. */
-	static func parse(config stream: InputStream, verbose: Bool) throws -> [FileShareEntryConfig] {
+	static func parse(config stream: InputStream, baseURLForPaths: URL, verbose: Bool) throws -> [FileShareEntryConfig] {
 		var entries = [FileShareEntryConfig]()
 		let simpleStream = SimpleInputStream(stream: stream, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, streamReadSizeLimit: nil)
 		repeat {
@@ -75,10 +75,10 @@ struct FileShareEntryConfig {
 			guard let parsedPath = scanner.scanUpToCharacters(from: CharacterSet()) else {
 				throw SimpleError(message: "Invalid input line (cannot read path) ——— \(line)")
 			}
-			let url = URL(fileURLWithPath: parsedPath)
+			let url = URL(fileURLWithPath: parsedPath, relativeTo: baseURLForPaths)
 			
 			let absolutePath: String
-			switch url.pathComponents.count {
+			switch URL(fileURLWithPath: parsedPath).pathComponents.count {
 				case 0: throw SimpleError(message: "Internal logic error: Got a URL with 0 path components; that’s weird…")
 				case 1: absolutePath = url.absoluteURL.path
 				default:

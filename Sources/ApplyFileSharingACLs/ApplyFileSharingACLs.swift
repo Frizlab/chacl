@@ -58,12 +58,11 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			guard let stream = InputStream(fileAtPath: configFilePath != "-" ? configFilePath : "/dev/stdin") else {
 				throw SimpleError(message: "Cannot open file")
 			}
-			print(fm.currentDirectoryPath)
-			if configFilePath != "-" {
-				fm.changeCurrentDirectoryPath(URL(fileURLWithPath: configFilePath).deletingLastPathComponent().path)
-			}
+			let baseURLForPaths: URL
+			if configFilePath != "-" {baseURLForPaths = URL(fileURLWithPath: configFilePath).deletingLastPathComponent()}
+			else                     {baseURLForPaths = URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true)}
 			stream.open(); defer {stream.close()}
-			configs = try FileShareEntryConfig.parse(config: stream, verbose: verbose)
+			configs = try FileShareEntryConfig.parse(config: stream, baseURLForPaths: baseURLForPaths, verbose: verbose)
 		}
 		
 		let odSession = ODSession.default()
