@@ -13,10 +13,7 @@ import SimpleStream
 struct FileShareEntryConfig {
 	
 	/** Parses the given config file. If file is "-", will read from stdin. */
-	static func parse(configFile: String) throws -> [FileShareEntryConfig] {
-		guard let stream = InputStream(fileAtPath: configFile != "-" ? configFile : "/dev/stdin") else {throw SimpleError(message: "Cannot open file")}
-		stream.open(); defer {stream.close()}
-		
+	static func parse(config stream: InputStream) throws -> [FileShareEntryConfig] {
 		var entries = [FileShareEntryConfig]()
 		let simpleStream = SimpleInputStream(stream: stream, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, streamReadSizeLimit: nil)
 		repeat {
@@ -37,32 +34,34 @@ struct FileShareEntryConfig {
 			guard line.first != "#" else {continue} /* Removing comments */
 			guard line.count > 0 else {continue} /* Removing empty (whitespace-only) lines */
 			
-			var curString: NSString?
 			let scanner = Scanner(string: line)
 			scanner.charactersToBeSkipped = CharacterSet()
 			
 			/* Getting permission destination */
 			var permissions = [Permission]()
-			while !scanner.scanString(":", into: nil) {
-				guard scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"), into: &curString), scanner.scanString(":", into: nil) else {
+			while (scanner.scanCharacters(from: .whitespaces) != nil || true) && scanner.scanString(":") == nil {
+				guard
+					let permissionDestinationAsString = scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"))?.trimmingCharacters(in: .whitespacesAndNewlines),
+					scanner.scanString(":") != nil
+				else {
 					throw SimpleError(message: "Invalid input line (cannot read permission destination) ——— \(line)")
 				}
-				let permissionDestinationAsString = curString!.trimmingCharacters(in: .whitespacesAndNewlines)
-				curString = nil
 				
 				/* Getting permission rights */
-				guard scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"), into: &curString), scanner.scanString(":", into: nil) else {
+				guard
+					let permissionRightsAsString = scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"))?.trimmingCharacters(in: .whitespacesAndNewlines),
+					scanner.scanString(":") != nil
+				else {
 					throw SimpleError(message: "Invalid input line (cannot read permission rights) ——— \(line)")
 				}
-				let permissionRightsAsString = curString!.trimmingCharacters(in: .whitespacesAndNewlines)
-				curString = nil
 				
 				/* Getting permission destination group or user name */
-				guard scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"), into: &curString), scanner.scanString(":", into: nil) else {
+				guard
+					let permissionDestinationGroupOrUserName = scanner.scanUpToCharacters(from: CharacterSet(charactersIn: ":"))?.trimmingCharacters(in: .whitespacesAndNewlines),
+					scanner.scanString(":") != nil
+				else {
 					throw SimpleError(message: "Invalid input line (cannot read group or user name) ——— \(line)")
 				}
-				let permissionDestinationGroupOrUserName = curString!.trimmingCharacters(in: .whitespacesAndNewlines)
-				curString = nil
 				
 				guard let destination = Permission.Destination.fromString(permissionDestinationAsString, with: permissionDestinationGroupOrUserName) else {
 					throw SimpleError(message: "Invalid input line (invalid permission destination) ——— \(line)")
@@ -73,11 +72,26 @@ struct FileShareEntryConfig {
 				permissions.append(Permission(destination: destination, rights: rights))
 			}
 			
-			guard scanner.scanUpToCharacters(from: CharacterSet(), into: &curString) else {
+			guard let path = scanner.scanUpToCharacters(from: CharacterSet()) else {
 				throw SimpleError(message: "Invalid input line (cannot read path) ——— \(line)")
 			}
-			let path = curString! as String
-			let absolutePath = URL(fileURLWithPath: path).absoluteURL.path
+			let url = URL(fileURLWithPath: path)
+			
+			let absolutePath: String
+			switch url.pathComponents.count {
+				case 0: throw SimpleError(message: "Internal logic error: Got a URL with 0 path components; that’s weird…")
+				case 1: absolutePath = url.absoluteURL.path
+				default:
+					let realpathed = url.deletingLastPathComponent().path
+					guard let realpath = Darwin.realpath(realpathed, nil).flatMap({ String(cString: $0) }) else {
+						throw SimpleError(message: "realpath cannot resolve path \(realpathed)")
+					}
+					absolutePath = URL(fileURLWithPath: realpath).appendingPathComponent(url.lastPathComponent).absoluteURL.path
+			}
+			guard FileManager.default.fileExists(atPath: absolutePath) else {
+				throw SimpleError(message: "File does not exist (or do not have permission to read) at path \(absolutePath)")
+			}
+			
 			if let idx = entries.firstIndex(where: { $0.absolutePath == absolutePath }) {
 				print("*** warning: entry for path \(absolutePath) found more than once; latest one wins.")
 				entries.remove(at: idx)

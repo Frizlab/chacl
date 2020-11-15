@@ -50,10 +50,21 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			_ = "not an empty if! The auth GUID has not the expected size (thus is probably not a UUID), so you’ll probably run into weird issues…"
 		}
 		
-		/* Parsing the config */
-		let configs = try FileShareEntryConfig.parse(configFile: configFilePath)
-		
 		let fm = FileManager.default
+		
+		/* Parsing the config */
+		let configs: [FileShareEntryConfig]
+		do {
+			guard let stream = InputStream(fileAtPath: configFilePath != "-" ? configFilePath : "/dev/stdin") else {
+				throw SimpleError(message: "Cannot open file")
+			}
+			print(fm.currentDirectoryPath)
+			if configFilePath != "-" {
+				fm.changeCurrentDirectoryPath(URL(fileURLWithPath: configFilePath).deletingLastPathComponent().path)
+			}
+			stream.open(); defer {stream.close()}
+			configs = try FileShareEntryConfig.parse(config: stream)
+		}
 		
 		let odSession = ODSession.default()
 		let odNode = try ODNode(session: odSession, type: ODNodeType(kODNodeTypeAuthentication))

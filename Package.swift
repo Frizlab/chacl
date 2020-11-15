@@ -1,11 +1,11 @@
-// swift-tools-version:5.0
+// swift-tools-version:5.1
 import PackageDescription
 
 
 let package = Package(
 	name: "ApplyFileSharingACLs",
 	platforms: [
-		.macOS(.v10_11)
+		.macOS(.v10_15)
 	],
 	products: [
 		.executable(name: "ApplyFileSharingACLs", targets: ["ApplyFileSharingACLs"])
