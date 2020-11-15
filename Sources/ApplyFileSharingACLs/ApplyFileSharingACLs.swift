@@ -31,6 +31,9 @@ struct ApplyFileSharingACLs : ParsableCommand {
 	@Flag
 	var verbose: Bool = false
 	
+	@Option
+	var adminUsername: String
+	
 	@Argument
 	var configFilePath: String
 	
@@ -56,13 +59,18 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		
 		let odSession = ODSession.default()
 		let odNode = try ODNode(session: odSession, type: ODNodeType(kODNodeTypeAuthentication))
+		let adminRecord = try odNode.record(withRecordType: kODRecordTypeUsers, name: adminUsername, attributes: [kODAttributeTypeGUID])
 		let spotlightRecord = try odNode.record(withRecordType: kODRecordTypeUsers, name: "spotlight", attributes: [kODAttributeTypeGUID])
-		guard let spotlightGUID = try (spotlightRecord.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) }) else {
-			throw SimpleError(message: "Zero or more than one value, or invalid UUID string for attribute kODAttributeTypeGUID for the spotlight user; cannot continue.")
+		guard let adminGUID = try (adminRecord.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) }),
+				let spotlightGUID = try (spotlightRecord.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) })
+		else {
+			throw SimpleError(message: "Zero or more than one value, or invalid UUID string for attribute kODAttributeTypeGUID for the a user or group; cannot continue.")
 		}
 		
+		let adminACLConf = try ACLConfig(adminACLWithUUID: adminGUID)
+		
 		/* Parsing the config */
-		let configs: [PreprocessedFileShareEntryConfig]
+		let configs: [URL: ACLConfig]
 		do {
 			guard let stream = InputStream(fileAtPath: configFilePath != "-" ? configFilePath : "/dev/stdin") else {
 				throw SimpleError(message: "Cannot open file")
@@ -71,69 +79,65 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			if configFilePath != "-" {baseURLForPaths = URL(fileURLWithPath: configFilePath).deletingLastPathComponent()}
 			else                     {baseURLForPaths = URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true)}
 			stream.open(); defer {stream.close()}
-			configs = try FileShareEntryConfig.parse(config: stream, baseURLForPaths: baseURLForPaths, verbose: verbose)
-				.map{ try PreprocessedFileShareEntryConfig(config: $0, odNode: odNode) }
+			let fileShareConfs = try FileShareEntryConfig.parse(config: stream, baseURLForPaths: baseURLForPaths, verbose: verbose)
+			configs = try Dictionary(grouping: fileShareConfs, by: { URL(fileURLWithPath: $0.absolutePath) })
+				.mapValues{ fileShareConf in
+					guard let fileShareConf = fileShareConf.onlyElement else {
+						throw SimpleError(message: "Internal logic error.")
+					}
+					return try ACLConfig(fileShareConf: fileShareConf, odNode: odNode)
+				}
 		}
 		
-		/* First step is to remove any custom ACL from all of the files in the
-		 * paths given in the config (except for Spotlight’s).
+		/* Let’s process these ACLs!
 		 *
 		 * We want to treat longer paths at the end to optimize away all path that
-		 * have a parent which include them.
-		 * Because the paths are absolute (and dropped of all the .. components),
-		 * treating longer paths at the end works (we’re guaranteed to have
-		 * treated the parent if it is listed). */
+		 * have a parent which include them. Beyond optimization, this is
+		 * important because we add a deny everyone ACE at the end of the ACE list
+		 * and want this ACE to be added once.
+		 *
+		 * Because the paths are absolute (and dropped of all the .. components,
+		 * and stripped, etc. using realpath), treating longer paths at the end
+		 * should works in most of the cases. */
 		var treated = Set<String>()
-		for config in configs.sorted(by: { $0.absolutePath.count < $1.absolutePath.count }) {
-			let path = config.absolutePath
+		for url in configs.keys.sorted(by: { $0.absoluteURL.path.count < $1.absoluteURL.path.count }) {
+			let path = url.absoluteURL.path
+			
 			guard !treated.contains(where: { path.hasPrefix($0) }) else {continue}
+			treated.insert(path)
 			
 			if verbose {
-				print((dryRun ? "** DRY RUN ** " : "") + "Removing all ACLs recursively in all files and folders in \(path)")
+				print((dryRun ? "** DRY RUN ** " : "") + "Setting ACLs recursively on all files and folders in \(path)")
 			}
-			treated.insert(path)
-			let url = URL(fileURLWithPath: path, isDirectory: true)
 			
 			/* Let’s create a directory enumerator to enumerate all the files and
 			 * folder in the path being treated. */
-			guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) else {
+			let url = URL(fileURLWithPath: path)
+			guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileResourceTypeKey]) else {
 				throw SimpleError(message: "Cannot get directory enumerator for url \(url)")
 			}
 			
-			/* Actually removing all the ACLs except Spotlight’s */
-			try removeACLs(from: url, whitelist: [spotlightGUID], dryRun: dryRun) /* We must first call for the current path itself: the directory enumerator does not output the source. */
+			/* Actually setting the ACLs */
+			try setACLs(on: url, whitelist: [spotlightGUID], adminACLConfs: [adminACLConf], aclConfs: configs, fileManager: fm, isRoot: true, dryRun: dryRun) /* We must first call for the current path itself: the directory enumerator does not output the source. */
 			while let subURL = enumerator.nextObject() as! URL? {
-				try removeACLs(from: subURL, whitelist: [spotlightGUID], dryRun: dryRun)
-			}
-		}
-		
-		/* Then we add the ACLs required from the config.
-		 * We also treat longer path at the end so the parents are treated first.
-		 * Note: This algorithm is not efficient; we should resove the final ACLs
-		 *       needed and apply them! However it’s simpler that way :-) */
-		for config in configs.sorted(by: { $0.absolutePath.count < $1.absolutePath.count }) {
-			let path = config.absolutePath
-			
-			if verbose {
-				print((dryRun ? "** DRY RUN ** " : "") + "Adding ACLs recursively in all files and folders in \(path)")
-			}
-			let url = URL(fileURLWithPath: path, isDirectory: true)
-			
-			/* Let’s create a directory enumerator to enumerate all the files and
-			 * folder in the path being treated. */
-			guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileResourceTypeKey]) else {
-				throw SimpleError(message: "Cannot get directory enumerator for path \(path)")
-			}
-			
-			/* Actually adding the ACLs */
-			try addACLs(to: url, conf: config, fileManager: fm, isRoot: true, dryRun: dryRun)
-			while let subURL = enumerator.nextObject() as! URL? {
-				try addACLs(to: subURL, conf: config, fileManager: fm, isRoot: false, dryRun: dryRun)
+				try setACLs(on: subURL, whitelist: [spotlightGUID], adminACLConfs: [adminACLConf], aclConfs: configs, fileManager: fm, isRoot: false, dryRun: dryRun)
 			}
 		}
 	}
 	
-	private func addACLs(to url: URL, conf: PreprocessedFileShareEntryConfig, fileManager fm: FileManager, isRoot: Bool, dryRun: Bool) throws {
+	private func iterateMatchingConfs(url: URL, confs: [URL: ACLConfig], _ block: (_ conf: ACLConfig, _ isRoot: Bool) throws -> Void) rethrows {
+		var curURL = URL(fileURLWithPath: "/")
+		
+		/* These asserts justify what we do next in the for. */
+		assert(url.pathComponents.first == "/")
+		assert(curURL.appendingPathComponent("/").pathComponents == ["/"])
+		for currentPathComponent in url.pathComponents {
+			curURL = curURL.appendingPathComponent(currentPathComponent)
+			if let conf = confs[curURL.standardizedFileURL] {try block(conf, curURL.standardizedFileURL == url.standardizedFileURL)}
+		}
+	}
+	
+	private func setACLs(on url: URL, whitelist: Set<UUID>, adminACLConfs: [ACLConfig], aclConfs: [URL: ACLConfig], fileManager fm: FileManager, isRoot: Bool, dryRun: Bool) throws {
 		let path = url.absoluteURL.path
 		guard let fileResourceType = try url.resourceValues(forKeys: [.fileResourceTypeKey]).fileResourceType else {
 			throw SimpleError(message: "Cannot get file type of URL \(url)")
@@ -143,40 +147,36 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			return
 		}
 		
-		let acl: acl_t!
+		var acl: acl_t!
 		if let currentACL = acl_get_link_np(path, ACL_TYPE_EXTENDED) {
 			acl = currentACL
 		} else {
 			guard errno == ENOENT else {throw SimpleError(message: "Cannot read ACLs for path \(path); got error number \(errno)")}
-			acl = acl_init(conf.permCount)
+			acl = acl_init(21)
 		}
 		defer {acl_free(UnsafeMutableRawPointer(acl))}
 		
-		let modified: Bool
 		let isDir = fileResourceType == .directory
-		if !isDir {modified = try conf.addFileACLEntries(to: acl, isRoot: isRoot)}
-		else      {modified = try conf.addFolderACLEntries(to: acl, isRoot: isRoot)}
+		/* Remove all ACLs except whiltelisted */
+		_ = try removeACLs(from: acl, whitelist: whitelist, pathForLogs: path)
+		/* Add admin ACL */
+		try adminACLConfs.forEach{ try _ = $0.addACLEntries(to: &acl, isFolder: isDir, isRoot: isRoot) }
+		/* Add ACLs from confs */
+		try iterateMatchingConfs(url: url, confs: aclConfs, { conf, isRoot in
+			_ = try conf.addACLEntries(to: &acl, isFolder: isDir, isRoot: isRoot)
+		})
 		
-		if modified {
-			if verbose || dryRun {
-				print((dryRun ? "** DRY RUN ** " : "") + "Adding ACLs to file \(path)")
-			}
-			if !dryRun {
-				guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
-					throw SimpleError(message: "cannot set ACL on file at path \(path)")
-				}
+		if verbose || dryRun {
+			print((dryRun ? "** DRY RUN ** " : "") + "setting ACLs to file \(path)")
+		}
+		if !dryRun {
+			guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
+				throw SimpleError(message: "cannot set ACL on file at path \(path)")
 			}
 		}
 	}
 	
-	private func removeACLs(from url: URL, whitelist: Set<UUID>, dryRun: Bool) throws {
-		let path = url.absoluteURL.path
-		guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else {
-			if errno == ENOENT {return} /* No ACL for this file or folder */
-			else               {throw SimpleError(message: "Cannot read ACLs for path \(path); got error number \(errno)")}
-		}
-		defer {acl_free(UnsafeMutableRawPointer(acl))}
-		
+	private func removeACLs(from acl: acl_t, whitelist: Set<UUID>, pathForLogs: String) throws -> Bool {
 		var modified = false
 		var currentACLEntry: acl_entry_t?
 		var currentACLEntryId = ACL_FIRST_ENTRY.rawValue
@@ -194,80 +194,66 @@ struct ApplyFileSharingACLs : ParsableCommand {
 				throw SimpleError(message: "Cannot get ACL Entry Tag Type")
 			}
 			guard currentACLEntryTagType == ACL_EXTENDED_ALLOW || currentACLEntryTagType == ACL_EXTENDED_DENY else {
-				throw SimpleError(message: "Unknown ACL tag type \(currentACLEntryTagType) for path \(path); bailing out")
+				throw SimpleError(message: "Unknown ACL tag type \(currentACLEntryTagType) for path \(pathForLogs); bailing out")
 			}
 			
 			/* The man of acl_get_qualifier says if the tag type is
 			 * ACL_EXTENDED_ALLOW or ACL_EXTENDED_DENY, the returned pointer will
 			 * point to a guid_t */
 			guard let userOrGroupGUIDPointer = acl_get_qualifier(currentACLEntry)?.assumingMemoryBound(to: guid_t.self) else {
-				throw SimpleError(message: "Cannot fetch userOrGroupGUID GUID for path \(path)")
+				throw SimpleError(message: "Cannot fetch userOrGroupGUID GUID for path \(pathForLogs)")
 			}
 			defer {acl_free(userOrGroupGUIDPointer)}
 			guard let userOrGroupGUID = UUID(guid: userOrGroupGUIDPointer.pointee) else {
-				throw SimpleError(message: "Cannot convert guid_t to UUID (weird though)")
+				throw SimpleError(message: "Cannot convert guid_t to UUID (weird though) for path \(pathForLogs)")
 			}
 			guard !whitelist.contains(userOrGroupGUID) else {
 				continue
 			}
-			
-			/* We do not need to know what are the permission on this ACL, we will
-			 * just drop it. */
-//			var currentACLEntryPermset: acl_permset_t?
-//			guard acl_get_permset(currentACLEntry, &currentACLEntryPermset) == 0 else {
-//				throw SimpleError(message: "Cannot get ACL Entry Permset")
-//			}
-//			for perm in [ACL_READ_DATA, ACL_LIST_DIRECTORY, ...] {
-//				let ret = acl_get_perm_np(currentACLEntryPermset, ACL_READ_DATA);
-//				switch ret {
-//					case 0: (/* Permission is not in the permset */)
-//					case 1: (/* Permission is in the permset */)
-//					default: (/* An error occurred */)
-//				}
-//			}
 			
 			/* Source code https://opensource.apple.com/source/Libc/Libc-825.26/posix1e/acl_entry.c.auto.html
 			 * confirms it is valid to get next entry when we have deleted one. */
 			acl_delete_entry(acl, currentACLEntry)
 			modified = true
 		}
-		if modified {
-			if verbose || dryRun {
-				print((dryRun ? "** DRY RUN ** " : "") + "Removed ACLs from file \(path)")
-			}
-			if !dryRun {
-				guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
-					throw SimpleError(message: "cannot set ACL on file at path \(path)")
-				}
-			}
-		}
+		return modified
 	}
 	
 	
 	/* Must be a class to have a deinit, because we keep refs to acl_t pointers
 	 * and need to free them when we are dealloc’d. */
-	private class PreprocessedFileShareEntryConfig {
+	private class ACLConfig {
 		
-		var absolutePath: String
-		var permCount: Int32
+		/* All from chmod man. There is ACL_SYNCHRONIZE from the headers, don’t
+		 * know what it does. */
+		static let allPermsForFiles   = [ACL_DELETE, ACL_READ_ATTRIBUTES, ACL_WRITE_ATTRIBUTES, ACL_READ_EXTATTRIBUTES, ACL_WRITE_EXTATTRIBUTES, ACL_READ_SECURITY, ACL_WRITE_SECURITY, ACL_CHANGE_OWNER, ACL_READ_DATA, ACL_WRITE_DATA, ACL_APPEND_DATA, ACL_EXECUTE]
+		static let allPermsForFolders = [ACL_DELETE, ACL_READ_ATTRIBUTES, ACL_WRITE_ATTRIBUTES, ACL_READ_EXTATTRIBUTES, ACL_WRITE_EXTATTRIBUTES, ACL_READ_SECURITY, ACL_WRITE_SECURITY, ACL_CHANGE_OWNER, ACL_LIST_DIRECTORY, ACL_SEARCH, ACL_ADD_FILE, ACL_ADD_SUBDIRECTORY, ACL_DELETE_CHILD]
 		
-		init(config: FileShareEntryConfig, odNode: ODNode) throws {
-			absolutePath = config.absolutePath
-			permCount = Int32(config.permissions.count)
-			
+		init(adminACLWithUUID uuid: UUID) throws {
+			refACLForFile = acl_init(1)
+			refACLForFolder = acl_init(1)
+			try Self.addEntry(to: &refACLForFile,   isAllowRule: true, forAFolder: false, guid: uuid.guid, perms: Self.allPermsForFiles)
+			try Self.addEntry(to: &refACLForFolder, isAllowRule: true, forAFolder: true,  guid: uuid.guid, perms: Self.allPermsForFolders)
+		}
+		
+		init(denyEveryoneACLWithUUID uuid: UUID) throws {
+			refACLForFile = acl_init(1)
+			refACLForFolder = acl_init(1)
+			try Self.addEntry(to: &refACLForFile,   isAllowRule: false, forAFolder: false, guid: uuid.guid, perms: Self.allPermsForFiles)
+			try Self.addEntry(to: &refACLForFolder, isAllowRule: false, forAFolder: true,  guid: uuid.guid, perms: Self.allPermsForFolders)
+		}
+		
+		init(fileShareConf: FileShareEntryConfig, odNode: ODNode) throws {
+			let permCount = Int32(fileShareConf.permissions.count)
 			refACLForFile = acl_init(permCount /* This is a minimum; we could put 0 here. */)
 			refACLForFolder = acl_init(permCount /* This is a minimum; we could put 0 here. */)
 			
-			for perm in config.permissions {
-				var aclEntryForFile, aclEntryForFolder: acl_entry_t?
-				guard acl_create_entry(&refACLForFile, &aclEntryForFile) == 0, acl_create_entry(&refACLForFolder, &aclEntryForFolder) == 0 else {
-					throw SimpleError(message: "cannot create ACL entry while init’ing a PreprocessedFileShareEntryConfig")
-				}
-				
-				guard acl_set_tag_type(aclEntryForFile, ACL_EXTENDED_ALLOW) == 0, acl_set_tag_type(aclEntryForFolder, ACL_EXTENDED_ALLOW) == 0 else {
-					throw SimpleError(message: "cannot set tag type of ACL entry while init’ing a PreprocessedFileShareEntryConfig")
-				}
-				
+			let filePermsRO   = [ACL_READ_ATTRIBUTES, ACL_READ_EXTATTRIBUTES, ACL_READ_DATA]
+			let folderPermsRO = [ACL_READ_ATTRIBUTES, ACL_READ_EXTATTRIBUTES, ACL_LIST_DIRECTORY, ACL_SEARCH]
+			let filePermsWO   = [ACL_DELETE, ACL_WRITE_ATTRIBUTES, ACL_WRITE_EXTATTRIBUTES, ACL_WRITE_DATA, ACL_APPEND_DATA]
+			let folderPermsWO = [ACL_DELETE, ACL_WRITE_ATTRIBUTES, ACL_WRITE_EXTATTRIBUTES, ACL_ADD_FILE, ACL_ADD_SUBDIRECTORY, ACL_DELETE_CHILD]
+			
+			for perm in fileShareConf.permissions {
 				let destRecordType: String
 				let destRecordName: String
 				switch perm.destination {
@@ -275,63 +261,20 @@ struct ApplyFileSharingACLs : ParsableCommand {
 					case .group(let groupname): destRecordType = kODRecordTypeGroups; destRecordName = groupname
 				}
 				let record = try odNode.record(withRecordType: destRecordType, name: destRecordName, attributes: [kODAttributeTypeGUID])
-				guard var guid = try (record.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) })?.guid else {
+				guard let destguid = try (record.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) })?.guid else {
 					throw SimpleError(message: "zero or more than one value, or invalid UUID string for attribute kODAttributeTypeGUID for permission destination \(perm.destination); cannot continue.")
 				}
-				guard acl_set_qualifier(aclEntryForFile, &guid) == 0, acl_set_qualifier(aclEntryForFolder, &guid) == 0 else {
-					throw SimpleError(message: "cannot set qualifier of ACL entry while init’ing a PreprocessedFileShareEntryConfig")
-				}
 				
-				var aclPermsetForFile, aclPermsetForFolder: acl_permset_t!
-				guard acl_get_permset(aclEntryForFile, &aclPermsetForFile) == 0, acl_get_permset(aclEntryForFolder, &aclPermsetForFolder) == 0 else {
-					throw SimpleError(message: "cannot get ACL entry permset while init’ing a PreprocessedFileShareEntryConfig")
-				}
+				/* Might be a surprising way of doing things, but if the perm.rights
+				 * enum type changes, we will fail here, whatever the change. */
+				let isRW: Bool
 				switch perm.rights {
-					case .readwrite:
-						try Self.addPerm(ACL_DELETE, to: aclPermsetForFile)
-						try Self.addPerm(ACL_DELETE, to: aclPermsetForFolder)
-						try Self.addPerm(ACL_WRITE_ATTRIBUTES, to: aclPermsetForFile)
-						try Self.addPerm(ACL_WRITE_ATTRIBUTES, to: aclPermsetForFolder)
-						try Self.addPerm(ACL_WRITE_EXTATTRIBUTES, to: aclPermsetForFile)
-						try Self.addPerm(ACL_WRITE_EXTATTRIBUTES, to: aclPermsetForFolder)
-						
-						try Self.addPerm(ACL_WRITE_DATA, to: aclPermsetForFile)
-						try Self.addPerm(ACL_APPEND_DATA, to: aclPermsetForFile)
-						
-						try Self.addPerm(ACL_ADD_FILE, to: aclPermsetForFolder)
-						try Self.addPerm(ACL_ADD_SUBDIRECTORY, to: aclPermsetForFolder)
-						try Self.addPerm(ACL_DELETE_CHILD, to: aclPermsetForFolder)
-						
-						fallthrough
-						
-					case .readonly:
-						try Self.addPerm(ACL_READ_ATTRIBUTES, to: aclPermsetForFile)
-						try Self.addPerm(ACL_READ_ATTRIBUTES, to: aclPermsetForFolder)
-						try Self.addPerm(ACL_READ_EXTATTRIBUTES, to: aclPermsetForFile)
-						try Self.addPerm(ACL_READ_EXTATTRIBUTES, to: aclPermsetForFolder)
-						
-						try Self.addPerm(ACL_READ_DATA, to: aclPermsetForFile)
-						
-						try Self.addPerm(ACL_LIST_DIRECTORY, to: aclPermsetForFolder)
-						try Self.addPerm(ACL_SEARCH, to: aclPermsetForFolder)
-				}
-				guard acl_set_permset(aclEntryForFile, aclPermsetForFile) == 0, acl_set_permset(aclEntryForFolder, aclPermsetForFolder) == 0 else {
-					throw SimpleError(message: "cannot set ACL entry permset while init’ing a PreprocessedFileShareEntryConfig")
+					case .readonly:  isRW = false
+					case .readwrite: isRW = true
 				}
 				
-				/* We do not set any flag on the files… Note a flagset can be set on
-				 * the ACL and the ACL entry. We only set it on the ACL entry, both
-				 * because it’s what we really want and also because I’m not sure
-				 * what setting on the ACL directly does. */
-				var aclFlagsetForFolder: acl_flagset_t!
-				guard acl_get_flagset_np(aclEntryForFolder.flatMap({ UnsafeMutableRawPointer($0) }), &aclFlagsetForFolder) == 0 else {
-					throw SimpleError(message: "cannot get ACL entry flagset while init’ing a PreprocessedFileShareEntryConfig")
-				}
-				try Self.addFlag(ACL_ENTRY_FILE_INHERIT, to: aclFlagsetForFolder)
-				try Self.addFlag(ACL_ENTRY_DIRECTORY_INHERIT, to: aclFlagsetForFolder)
-				guard acl_set_flagset_np(aclEntryForFolder.flatMap({ UnsafeMutableRawPointer($0) }), aclFlagsetForFolder) == 0 else {
-					throw SimpleError(message: "cannot set ACL entry flagset while init’ing a PreprocessedFileShareEntryConfig")
-				}
+				try Self.addEntry(to: &refACLForFile,   isAllowRule: true, forAFolder: false, guid: destguid, perms: filePermsRO   + (isRW ? filePermsWO   : []))
+				try Self.addEntry(to: &refACLForFolder, isAllowRule: true, forAFolder: true,  guid: destguid, perms: folderPermsRO + (isRW ? folderPermsWO : []))
 			}
 		}
 		
@@ -341,24 +284,55 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		}
 		
 		/** Returns `true` if the ACL has been modified. */
-		func addFileACLEntries(to acl: acl_t, isRoot: Bool) throws -> Bool {
-			return try addACLEntries(to: acl, isRoot: isRoot, ref: refACLForFile)
+		func addACLEntries(to acl: inout acl_t, isFolder: Bool, isRoot: Bool) throws -> Bool {
+			return try addACLEntries(to: acl, isRoot: isRoot, ref: isFolder ? refACLForFolder : refACLForFile)
 		}
 		
-		/** Returns `true` if the ACL has been modified. */
-		func addFolderACLEntries(to acl: acl_t, isRoot: Bool) throws -> Bool {
-			return try addACLEntries(to: acl, isRoot: isRoot, ref: refACLForFolder)
-		}
-		
-		private static func addPerm(_ perm: acl_perm_t, to permset: acl_permset_t) throws {
-			guard acl_add_perm(permset, perm) == 0 else {
-				throw SimpleError(message: "cannot add perm to permset")
+		private static func addEntry(to acl: inout acl_t!, isAllowRule: Bool, forAFolder: Bool, guid: guid_t, perms: [acl_perm_t]) throws {
+			var aclEntry: acl_entry_t?
+			guard acl_create_entry(&acl, &aclEntry) == 0 else {
+				throw SimpleError(message: "cannot create ACL entry while init’ing a ACLConfig")
 			}
-		}
-		
-		private static func addFlag(_ flag: acl_flag_t, to flagset: acl_flagset_t) throws {
-			guard acl_add_flag_np(flagset, flag) == 0 else {
-				throw SimpleError(message: "cannot add flag to flagset")
+			
+			guard acl_set_tag_type(aclEntry, isAllowRule ? ACL_EXTENDED_ALLOW : ACL_EXTENDED_DENY) == 0 else {
+				throw SimpleError(message: "cannot set tag type of ACL entry while init’ing a ACLConfig")
+			}
+			
+			var guid = guid
+			guard acl_set_qualifier(aclEntry, &guid) == 0 else {
+				throw SimpleError(message: "cannot set qualifier of ACL entry while init’ing a ACLConfig")
+			}
+			
+			var aclPermset: acl_permset_t!
+			guard acl_get_permset(aclEntry, &aclPermset) == 0 else {
+				throw SimpleError(message: "cannot get ACL entry permset while init’ing a ACLConfig")
+			}
+			for perm in perms {
+				guard acl_add_perm(aclPermset, perm) == 0 else {
+					throw SimpleError(message: "cannot add perm to permset")
+				}
+			}
+			guard acl_set_permset(aclEntry, aclPermset) == 0 else {
+				throw SimpleError(message: "cannot set ACL entry permset while init’ing a ACLConfig")
+			}
+			
+			/* We do not set any flag on the files… Note a flagset can be set on
+			 * the ACL and the ACL entry. We only set it on the ACL entry, both
+			 * because it’s what we really want and also because I’m not sure what
+			 * setting on the ACL directly does. */
+			if forAFolder {
+				var aclFlagset: acl_flagset_t!
+				guard acl_get_flagset_np(aclEntry.flatMap({ UnsafeMutableRawPointer($0) }), &aclFlagset) == 0 else {
+					throw SimpleError(message: "cannot get ACL entry flagset while init’ing a ACLConfig")
+				}
+				for flag in [ACL_ENTRY_FILE_INHERIT, ACL_ENTRY_DIRECTORY_INHERIT] {
+					guard acl_add_flag_np(aclFlagset, flag) == 0 else {
+						throw SimpleError(message: "cannot add flag to flagset")
+					}
+				}
+				guard acl_set_flagset_np(aclEntry.flatMap({ UnsafeMutableRawPointer($0) }), aclFlagset) == 0 else {
+					throw SimpleError(message: "cannot set ACL entry flagset while init’ing a ACLConfig")
+				}
 			}
 		}
 		
