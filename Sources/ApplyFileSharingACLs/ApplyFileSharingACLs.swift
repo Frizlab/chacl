@@ -156,6 +156,9 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		}
 		defer {acl_free(UnsafeMutableRawPointer(acl))}
 		
+		/* We get the external representation of the ACL before modifications. */
+		let externalACLRepresentationBeforeModif = try getExternalRepresentation(of: acl)
+		
 		let isDir = fileResourceType == .directory
 		/* Remove all ACLs except whiltelisted */
 		_ = try removeACLs(from: acl, whitelist: whitelist, pathForLogs: path)
@@ -166,14 +169,39 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			_ = try conf.addACLEntries(to: &acl, isFolder: isDir, isRoot: isRoot)
 		})
 		
-		if verbose || dryRun {
-			print((dryRun ? "** DRY RUN ** " : "") + "setting ACLs to file \(path)")
-		}
-		if !dryRun {
-			guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
-				throw SimpleError(message: "cannot set ACL on file at path \(path)")
+		/* Now let’s get the representation after the modifications. We then check
+		 * if the representation is different before actually trying to modify the
+		 * filesystem. Doc does not say reprensentation of two ACLs representing
+		 * the same permission will always produce the same result but we can
+		 * guess it does, and in any case, two same representation will definitely
+		 * represent the same ACL. */
+		let externalACLRepresentationAfterModif = try getExternalRepresentation(of: acl)
+		
+		if externalACLRepresentationBeforeModif != externalACLRepresentationAfterModif {
+			if verbose || dryRun {
+				print((dryRun ? "** DRY RUN ** " : "") + "setting ACLs to file \(path)")
+			}
+			if !dryRun {
+				guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
+					throw SimpleError(message: "cannot set ACL on file at path \(path)")
+				}
 			}
 		}
+	}
+	
+	private func getExternalRepresentation(of acl: acl_t) throws -> Data {
+		let size = acl_size(acl)
+		guard size >= 0 else {
+			throw SimpleError(message: "cannot get size of external representation of ACL")
+		}
+		var buffer = Data(repeating: 0, count: size)
+		let actualSize = buffer.withUnsafeMutableBytes{ bytes in
+			return acl_copy_ext_native(bytes.baseAddress, acl, size)
+		}
+		guard actualSize >= 0 else {
+			throw SimpleError(message: "cannot get external representation of ACL")
+		}
+		return buffer[0..<actualSize]
 	}
 	
 	private func removeACLs(from acl: acl_t, whitelist: Set<UUID>, pathForLogs: String) throws -> Bool {
