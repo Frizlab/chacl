@@ -63,7 +63,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 				fm.changeCurrentDirectoryPath(URL(fileURLWithPath: configFilePath).deletingLastPathComponent().path)
 			}
 			stream.open(); defer {stream.close()}
-			configs = try FileShareEntryConfig.parse(config: stream)
+			configs = try FileShareEntryConfig.parse(config: stream, verbose: verbose)
 		}
 		
 		let odSession = ODSession.default()

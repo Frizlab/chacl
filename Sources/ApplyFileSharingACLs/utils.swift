@@ -38,5 +38,5 @@ class StandardOutputStream: TextOutputStream {
 	
 }
 
-//var mx_stdout = StandardOutputStream()
-//var mx_stderr = StandardErrorOutputStream()
+var mx_stdout = StandardOutputStream()
+var mx_stderr = StandardErrorOutputStream()

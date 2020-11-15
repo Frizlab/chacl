@@ -13,7 +13,7 @@ import SimpleStream
 struct FileShareEntryConfig {
 	
 	/** Parses the given config file. If file is "-", will read from stdin. */
-	static func parse(config stream: InputStream) throws -> [FileShareEntryConfig] {
+	static func parse(config stream: InputStream, verbose: Bool) throws -> [FileShareEntryConfig] {
 		var entries = [FileShareEntryConfig]()
 		let simpleStream = SimpleInputStream(stream: stream, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, streamReadSizeLimit: nil)
 		repeat {
@@ -72,10 +72,10 @@ struct FileShareEntryConfig {
 				permissions.append(Permission(destination: destination, rights: rights))
 			}
 			
-			guard let path = scanner.scanUpToCharacters(from: CharacterSet()) else {
+			guard let parsedPath = scanner.scanUpToCharacters(from: CharacterSet()) else {
 				throw SimpleError(message: "Invalid input line (cannot read path) ——— \(line)")
 			}
-			let url = URL(fileURLWithPath: path)
+			let url = URL(fileURLWithPath: parsedPath)
 			
 			let absolutePath: String
 			switch url.pathComponents.count {
@@ -91,9 +91,12 @@ struct FileShareEntryConfig {
 			guard FileManager.default.fileExists(atPath: absolutePath) else {
 				throw SimpleError(message: "File does not exist (or do not have permission to read) at path \(absolutePath)")
 			}
+			if verbose && parsedPath != absolutePath {
+				print("path cleanup: \(parsedPath) -> \(absolutePath)")
+			}
 			
 			if let idx = entries.firstIndex(where: { $0.absolutePath == absolutePath }) {
-				print("*** warning: entry for path \(absolutePath) found more than once; latest one wins.")
+				print("*** warning: entry for path \(absolutePath) found more than once; latest one wins.", to: &mx_stderr)
 				entries.remove(at: idx)
 				assert(!entries.contains(where: { $0.absolutePath == absolutePath }))
 			}
