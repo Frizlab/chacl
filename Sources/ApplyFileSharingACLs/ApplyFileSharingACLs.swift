@@ -60,14 +60,17 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		let odSession = ODSession.default()
 		let odNode = try ODNode(session: odSession, type: ODNodeType(kODNodeTypeAuthentication))
 		let adminRecord = try odNode.record(withRecordType: kODRecordTypeUsers, name: adminUsername, attributes: [kODAttributeTypeGUID])
+		let everyoneRecord = try odNode.record(withRecordType: kODRecordTypeGroups, name: "everyone", attributes: [kODAttributeTypeGUID])
 		let spotlightRecord = try odNode.record(withRecordType: kODRecordTypeUsers, name: "spotlight", attributes: [kODAttributeTypeGUID])
 		guard let adminGUID = try (adminRecord.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) }),
+				let everyoneGUID = try (everyoneRecord.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) }),
 				let spotlightGUID = try (spotlightRecord.values(forAttribute: kODAttributeTypeGUID).onlyElement as? String).flatMap({ UUID(uuidString: $0) })
 		else {
 			throw SimpleError(message: "Zero or more than one value, or invalid UUID string for attribute kODAttributeTypeGUID for the a user or group; cannot continue.")
 		}
 		
 		let adminACLConf = try ACLConfig(adminACLWithUUID: adminGUID)
+		let everyoneACLConf = try ACLConfig(denyEveryoneExecuteACLWithUUID: everyoneGUID)
 		
 		/* Parsing the config */
 		let configs: [URL: ACLConfig]
@@ -118,9 +121,9 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			}
 			
 			/* Actually setting the ACLs */
-			try setACLs(on: url, whitelist: [spotlightGUID], adminACLConfs: [adminACLConf], aclConfs: configs, fileManager: fm, isRoot: true, dryRun: dryRun) /* We must first call for the current path itself: the directory enumerator does not output the source. */
+			try setACLs(on: url, whitelist: [spotlightGUID], adminACLConfs: [adminACLConf], denyExecuteConf: everyoneACLConf, aclConfs: configs, fileManager: fm, isRoot: true, dryRun: dryRun) /* We must first call for the current path itself: the directory enumerator does not output the source. */
 			while let subURL = enumerator.nextObject() as! URL? {
-				try setACLs(on: subURL, whitelist: [spotlightGUID], adminACLConfs: [adminACLConf], aclConfs: configs, fileManager: fm, isRoot: false, dryRun: dryRun)
+				try setACLs(on: subURL, whitelist: [spotlightGUID], adminACLConfs: [adminACLConf], denyExecuteConf: everyoneACLConf, aclConfs: configs, fileManager: fm, isRoot: false, dryRun: dryRun)
 			}
 		}
 	}
@@ -137,7 +140,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		}
 	}
 	
-	private func setACLs(on url: URL, whitelist: Set<UUID>, adminACLConfs: [ACLConfig], aclConfs: [URL: ACLConfig], fileManager fm: FileManager, isRoot: Bool, dryRun: Bool) throws {
+	private func setACLs(on url: URL, whitelist: Set<UUID>, adminACLConfs: [ACLConfig], denyExecuteConf: ACLConfig, aclConfs: [URL: ACLConfig], fileManager fm: FileManager, isRoot: Bool, dryRun: Bool) throws {
 		let path = url.absoluteURL.path
 		let urlResourceValues = try url.resourceValues(forKeys: [.fileResourceTypeKey, .isSystemImmutableKey, .isUserImmutableKey])
 		guard let fileResourceType = urlResourceValues.fileResourceType else {
@@ -176,6 +179,8 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		try iterateMatchingConfs(url: url, confs: aclConfs, { conf, isRoot in
 			_ = try conf.addACLEntries(to: &acl, isFolder: isDir, isRoot: isRoot)
 		})
+		/* Add deny execute ACL */
+		_ = try denyExecuteConf.addACLEntries(to: &acl, isFolder: isDir, isRoot: isRoot)
 		
 		/* Now let’s get the representation after the modifications. We then check
 		 * if the representation is different before actually trying to modify the
@@ -313,11 +318,10 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			try Self.addEntry(to: &refACLForFolder, isAllowRule: true, forAFolder: true,  guid: uuid.guid, perms: Self.allPermsForFolders)
 		}
 		
-		init(denyEveryoneACLWithUUID uuid: UUID) throws {
+		init(denyEveryoneExecuteACLWithUUID uuid: UUID) throws {
+			refACLForFolder = nil
 			refACLForFile = acl_init(1)
-			refACLForFolder = acl_init(1)
-			try Self.addEntry(to: &refACLForFile,   isAllowRule: false, forAFolder: false, guid: uuid.guid, perms: Self.allPermsForFiles)
-			try Self.addEntry(to: &refACLForFolder, isAllowRule: false, forAFolder: true,  guid: uuid.guid, perms: Self.allPermsForFolders)
+			try Self.addEntry(to: &refACLForFile,   isAllowRule: false, forAFolder: false, guid: uuid.guid, perms: [ACL_EXECUTE])
 		}
 		
 		init(fileShareConf: FileShareEntryConfig, odNode: ODNode) throws {
@@ -356,13 +360,14 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		}
 		
 		deinit {
-			acl_free(UnsafeMutableRawPointer(refACLForFile))
-			acl_free(UnsafeMutableRawPointer(refACLForFolder))
+			if let acl = refACLForFile   {acl_free(UnsafeMutableRawPointer(acl))}
+			if let acl = refACLForFolder {acl_free(UnsafeMutableRawPointer(acl))}
 		}
 		
 		/** Returns `true` if the ACL has been modified. */
 		func addACLEntries(to acl: inout acl_t, isFolder: Bool, isRoot: Bool) throws -> Bool {
-			return try addACLEntries(to: acl, isRoot: isRoot, ref: isFolder ? refACLForFolder : refACLForFile)
+			guard let ref = isFolder ? refACLForFolder : refACLForFile else {return false}
+			return try addACLEntries(to: acl, isRoot: isRoot, ref: ref)
 		}
 		
 		private static func addEntry(to acl: inout acl_t!, isAllowRule: Bool, forAFolder: Bool, guid: guid_t, perms: [acl_perm_t]) throws {
