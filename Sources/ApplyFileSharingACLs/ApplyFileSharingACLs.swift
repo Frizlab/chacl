@@ -143,7 +143,9 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			throw SimpleError(message: "Cannot get file type of URL \(url)")
 		}
 		guard fileResourceType == .directory || fileResourceType == .regular else {
-			print("ignored non-regular and non-directory path \(path)")
+			if verbose {
+				print("ignored non-regular and non-directory path \(path)")
+			}
 			return
 		}
 		
@@ -183,7 +185,9 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			}
 			if !dryRun {
 				guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
-					throw SimpleError(message: "cannot set ACL on file at path \(path)")
+//					throw SimpleError(message: "cannot set ACL on file at path \(path) (\(errno))")
+					print("***** ERROR: cannot set ACL on file at path \(path) (\(errno))", to: &mx_stderr)
+					return
 				}
 			}
 		}
