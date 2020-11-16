@@ -1,0 +1,3 @@
+g: staff   : r :  :fileshare
+g: nobody  : r :  :fileshare/1
+g: everyone: r :  :fileshare-bis

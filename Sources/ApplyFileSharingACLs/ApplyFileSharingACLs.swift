@@ -103,7 +103,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		for url in configs.keys.sorted(by: { $0.absoluteURL.path.count < $1.absoluteURL.path.count }) {
 			let path = url.absoluteURL.path
 			
-			guard !treated.contains(where: { path.hasPrefix($0) }) else {continue}
+			guard !treated.contains(where: { path.hasPrefix($0 + "/") }) else {continue}
 			treated.insert(path)
 			
 			if verbose {

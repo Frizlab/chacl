@@ -15,6 +15,8 @@ u:frizlab:rw  ::/Volumes/Macintosh HD/Users/frizlab/Desktop/ApplyFileSharingACLs
 ############################################################################################
                                  :.
 g: everyone: r :                 :/Users/frizlab/Desktop/ApplyFileSharingACLsTests/with_acls 
+g: staff   : r :                 :1
+g: everyone: r :                 :1-1
 g: staff   : r :                 :2
 u: frizlab : rw:                 :2/link to 1
 g: staff   : rw: u: frizlab: rw: :3/3 - 1.txt
