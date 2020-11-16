@@ -113,7 +113,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			/* Let’s create a directory enumerator to enumerate all the files and
 			 * folder in the path being treated. */
 			let url = URL(fileURLWithPath: path)
-			guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileResourceTypeKey]) else {
+			guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileResourceTypeKey, .isSystemImmutableKey, .isUserImmutableKey]) else {
 				throw SimpleError(message: "Cannot get directory enumerator for url \(url)")
 			}
 			
@@ -139,9 +139,15 @@ struct ApplyFileSharingACLs : ParsableCommand {
 	
 	private func setACLs(on url: URL, whitelist: Set<UUID>, adminACLConfs: [ACLConfig], aclConfs: [URL: ACLConfig], fileManager fm: FileManager, isRoot: Bool, dryRun: Bool) throws {
 		let path = url.absoluteURL.path
-		guard let fileResourceType = try url.resourceValues(forKeys: [.fileResourceTypeKey]).fileResourceType else {
+		let urlResourceValues = try url.resourceValues(forKeys: [.fileResourceTypeKey, .isSystemImmutableKey, .isUserImmutableKey])
+		guard let fileResourceType = urlResourceValues.fileResourceType else {
 			throw SimpleError(message: "Cannot get file type of URL \(url)")
 		}
+		let isUserImmutable = urlResourceValues.isUserImmutable ?? false
+		let isSystemImmutable = urlResourceValues.isSystemImmutable ?? false
+		if urlResourceValues.isUserImmutable == nil {print("*** WARNING: cannot get user immutable flags on file at path \(path)", to: &mx_stderr)}
+		if urlResourceValues.isSystemImmutable == nil {print("*** WARNING: cannot get system immutable flags on file at path \(path)", to: &mx_stderr)}
+		
 		guard fileResourceType == .directory || fileResourceType == .regular else {
 			if verbose {
 				print("ignored non-regular and non-directory path \(path)")
@@ -180,16 +186,55 @@ struct ApplyFileSharingACLs : ParsableCommand {
 		let externalACLRepresentationAfterModif = try getExternalRepresentation(of: acl)
 		
 		if externalACLRepresentationBeforeModif != externalACLRepresentationAfterModif {
-			if verbose || dryRun {
-				print((dryRun ? "** DRY RUN ** " : "") + "setting ACLs to file \(path)")
-			}
-			if !dryRun {
-				guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
+			if dryRun {
+				print("** DRY RUN ** setting ACLs to file \(path)")
+			} else {
+				/* Deal with the immutable flags */
+				if isSystemImmutable || isUserImmutable {
+					if verbose {print("removing system and/or user immutable flag on file at path \(path)")}
+					changeFlagsOrPrintError({ UInt32(Int32($0) & ~(SF_IMMUTABLE|UF_IMMUTABLE)) }, url: url, urlResourceValues: urlResourceValues)
+				}
+				
+				/* Set ACL */
+				if verbose {print("setting ACLs to file \(path)")}
+				if acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) != 0 {
 //					throw SimpleError(message: "cannot set ACL on file at path \(path) (\(errno))")
 					print("***** ERROR: cannot set ACL on file at path \(path): \(String(cString: strerror(errno)))", to: &mx_stderr)
-					return
+				}
+				
+				/* Put the immutable flag back */
+				if isSystemImmutable || isUserImmutable {
+					if verbose {print("putting back system and/or user immutable flag on file at path \(path)")}
+					changeFlagsOrPrintError({ $0 | UInt32((isSystemImmutable ? SF_IMMUTABLE : 0) | (isUserImmutable ? UF_IMMUTABLE : 0)) }, url: url, urlResourceValues: urlResourceValues)
 				}
 			}
+		}
+	}
+	
+	/* Technically can fail, but we ignore the error, the does not throw. */
+	private func changeFlagsOrPrintError(_ flagBlock: (UInt32) -> UInt32, url: URL, urlResourceValues: URLResourceValues) {
+		let path = url.absoluteURL.path
+		/* Funny thing, the isSystemImmutableKey key is documented as being rw,
+		 * but in Swift, the isSystemImmutable is ro. So we’ll use the
+		 * underlying syscalls (this binary should be called as root, so it
+		 * should have the permission).
+		 * As long as we do it for the system immutable flag, let’s also do it
+		 * for the user one here… */
+		let errormsg = url.withUnsafeFileSystemRepresentation{ cpath -> String? in
+			var statresults = stat()
+			/* First let’s get the current flags. */
+			guard lstat(cpath, &statresults) == 0 else {
+				return "cannot lstat"
+			}
+			/* Then we XOR the immutable flags. */
+			statresults.st_flags = flagBlock(statresults.st_flags)
+			guard chflags(cpath, statresults.st_flags) == 0 else {
+				return "cannot chflags"
+			}
+			return nil
+		}
+		if let errormsg = errormsg {
+			print("***** ERROR: cannot remove system immutable flag on file at path \(path): \(errormsg). ACL set will probably fail.", to: &mx_stderr)
 		}
 	}
 	
