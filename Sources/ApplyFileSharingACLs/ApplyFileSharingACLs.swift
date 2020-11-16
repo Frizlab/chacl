@@ -186,7 +186,7 @@ struct ApplyFileSharingACLs : ParsableCommand {
 			if !dryRun {
 				guard acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) == 0 else {
 //					throw SimpleError(message: "cannot set ACL on file at path \(path) (\(errno))")
-					print("***** ERROR: cannot set ACL on file at path \(path) (\(errno))", to: &mx_stderr)
+					print("***** ERROR: cannot set ACL on file at path \(path): \(String(cString: strerror(errno)))", to: &mx_stderr)
 					return
 				}
 			}
