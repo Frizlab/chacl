@@ -6,7 +6,8 @@
  */
 
 import Foundation
-import SimpleStream
+
+import StreamReader
 
 
 
@@ -15,20 +16,13 @@ struct FileShareEntryConfig {
 	/** Parses the given config file. If file is "-", will read from stdin. */
 	static func parse(config stream: InputStream, baseURLForPaths: URL, verbose: Bool) throws -> [FileShareEntryConfig] {
 		var entries = [FileShareEntryConfig]()
-		let simpleStream = SimpleInputStream(stream: stream, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, streamReadSizeLimit: nil)
+		let simpleStream = InputStreamReader(stream: stream, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, readSizeLimit: nil)
 		repeat {
-			let lineData: Data
-			do {
-				lineData = try simpleStream.readData(upTo: [Data(base64Encoded: "Cg==")!], matchingMode: .anyMatchWins, includeDelimiter: true).data
-			} catch SimpleStreamError.delimitersNotFound {
-				/* If we have a delimitersNotFound error, we still want to read the text remaining. */
-				lineData = try simpleStream.readData(upTo: [], matchingMode: .anyMatchWins, includeDelimiter: false).data
-			} catch {
-				throw error
+			guard let (lineData, _) = try simpleStream.readLine() else {
+				break /* We've reached the end of the file */
 			}
-			guard lineData.count > 0 else {break} /* We've reached the end of the file */
 			
-			guard let line = (String(data: lineData, encoding: .utf8)?.dropLast()).flatMap(String.init) else {
+			guard let line = String(data: lineData, encoding: .utf8) else {
 				throw SimpleError(message: "Cannot read one line in text")
 			}
 			guard line.first != "#" else {continue} /* Removing comments */
