@@ -1,6 +1,6 @@
 /*
  * SimpleError.swift
- * ApplyFileSharingACLs
+ * chacl
  *
  * Created by François Lamboley on 31/07/2020.
  */

@@ -1,6 +1,6 @@
 /*
- * ApplyFileSharingACLs.swift
- * ApplyFileSharingACLs
+ * chacl.swift
+ * chacl
  *
  * Created by François Lamboley.
  */
@@ -13,11 +13,11 @@ import ArgumentParser
 
 
 /* Useful: https://opensource.apple.com/source/Libc/Libc-583/include/sys/acl.h.auto.html */
-
-struct ApplyFileSharingACLs : ParsableCommand {
+@main
+struct Chacl : ParsableCommand {
 	
 	static var configuration = CommandConfiguration(
-		commandName: "ApplyFileSharingACLs",
+		commandName: "chacl",
 		abstract: "Apply ACLs in a hierarchy of files and folders given a list of rules.",
 		discussion: """
 		The config file format is as follow:

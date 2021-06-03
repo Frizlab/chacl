@@ -1,20 +1,20 @@
 # This is great (and a test comment)
 # All paths are relative to the config file.
-# Note: This folder was on my Desktop and was named differently. That’s why the absolute paths in this repo start w/ “/Users/frizlab/Desktop/ApplyFileSharingACLsTests/”…
+# Note: This folder was on my Desktop and was named differently. That’s why the absolute paths in this repo start w/ “/Users/frizlab/Desktop/chacl/”…
 
-g:everyone:r: g:everyone:rw:u:frizlab:rw::/Users/frizlab/Desktop/ApplyFileSharingACLsTests/5
+g:everyone:r: g:everyone:rw:u:frizlab:rw::/Users/frizlab/Desktop/chacl/5
 
-u:frizlab:rw  ::/Users/frizlab/Desktop/ApplyFileSharingACLsTests/2
- u :frizlab : rw  ::/Users/frizlab/Desktop/ApplyFileSharingACLsTests/2/
-u:frizlab:rw  ::/Users/frizlab/Desktop/ApplyFileSharingACLsTests//.././..//Desktop////ApplyFileSharingACLsTests/.//2/
-u:frizlab:rw  ::/Users/frizlab/Desktop/ApplyFileSharingACLsTests/4/
-u:frizlab:rw  ::/Users/frizlab/Desktop/ApplyFileSharingACLsTests/4
+u:frizlab:rw  ::/Users/frizlab/Desktop/chacl/2
+ u :frizlab : rw  ::/Users/frizlab/Desktop/chacl/2/
+u:frizlab:rw  ::/Users/frizlab/Desktop/chacl//.././..//Desktop////chacl/.//2/
+u:frizlab:rw  ::/Users/frizlab/Desktop/chacl/4/
+u:frizlab:rw  ::/Users/frizlab/Desktop/chacl/4
 u:frizlab:rw  ::4
-u:frizlab:rw  ::/Volumes/Macintosh HD/Users/frizlab/Desktop/ApplyFileSharingACLsTests/2/
+u:frizlab:rw  ::/Volumes/Macintosh HD/Users/frizlab/Desktop/chacl/2/
 
 ############################################################################################
                                  :.
-g: everyone: r :                 :/Users/frizlab/Desktop/ApplyFileSharingACLsTests/with_acls 
+g: everyone: r :                 :/Users/frizlab/Desktop/chacl/with_acls 
 g: staff   : r :                 :1
 g: everyone: r :                 :1-1
 g: staff   : r :                 :2

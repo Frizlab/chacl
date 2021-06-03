@@ -1,6 +1,6 @@
 /*
  * FileShareEntryConfig.swift
- * ApplyFileSharingACLs
+ * chacl
  *
  * Created by François Lamboley on 11/15/17.
  */

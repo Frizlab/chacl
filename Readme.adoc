@@ -1,0 +1,4 @@
+= chacl
+François Lamboley <fload@me.com>
+
+Set ACL recursively on files and folder from an easy to read configuration.
