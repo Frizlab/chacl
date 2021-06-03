@@ -11,10 +11,8 @@ let package = Package(
 		.executable(name: "chacl", targets: ["chacl"])
 	],
 	dependencies: [
-//		.package(url: "https://github.com/apple/swift-argument-parser", from: "0.4.3"),
-//		.package(url: "https://github.com/Frizlab/stream-reader.git", from: "3.2.1")
-		.package(url: "https://github.com/apple/swift-argument-parser", from: "0.2.1"),
-		.package(url: "https://github.com/Frizlab/stream-reader.git", from: "3.0.0")
+		.package(url: "https://github.com/apple/swift-argument-parser", from: "0.4.3"),
+		.package(url: "https://github.com/Frizlab/stream-reader.git", from: "3.2.1")
 	],
 	targets: [
 		.executableTarget(name: "chacl", dependencies: [
