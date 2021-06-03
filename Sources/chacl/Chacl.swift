@@ -9,6 +9,8 @@ import Foundation
 import OpenDirectory
 
 import ArgumentParser
+import CLTLogger
+import Logging
 
 
 
@@ -38,6 +40,8 @@ struct Chacl : ParsableCommand {
 	var configFilePath: String
 	
 	func run() throws {
+		LoggingSystem.bootstrap{ _ in CLTLogger() }
+		
 		/* Commented because the compiler knows KAUTH_GUID_SIZE == 16 at compile
 		 * time and thus complains w/ a warning the else part of the guard will
 		 * never be executed…
@@ -85,7 +89,7 @@ struct Chacl : ParsableCommand {
 				fh = try FileHandle(forReadingFrom: URL(fileURLWithPath: configFilePath))
 				baseURLForPaths = URL(fileURLWithPath: configFilePath).deletingLastPathComponent()
 			}
-			let aclConf = try ChaclConfigEntry.parse(config: fh, baseURLForPaths: baseURLForPaths, verbose: verbose)
+			let aclConf = try ChaclConfigEntry.parse(config: fh, baseURLForPaths: baseURLForPaths, logger: logger)
 			configs = try Dictionary(grouping: aclConf, by: { URL(fileURLWithPath: $0.absolutePath) })
 				.mapValues{ confEntry in
 					guard let confEntry = confEntry.onlyElement else {
@@ -131,6 +135,15 @@ struct Chacl : ParsableCommand {
 		}
 	}
 	
+	/** Must not be accessed before the logging system has been bootstrapped. */
+	private static var logger: Logger = {
+		var ret = Logger(label: "me.frizlab.chacl")
+		ret.logLevel = .warning
+		return ret
+	}()
+	/** Must not be accessed before the logging system has been bootstrapped. */
+	private var logger: Logger {return Self.logger}
+	
 	private func iterateMatchingConfs(url: URL, confs: [URL: AclConfig], _ block: (_ conf: AclConfig, _ isRoot: Bool) throws -> Void) rethrows {
 		var curURL = URL(fileURLWithPath: "/")
 		
@@ -151,8 +164,8 @@ struct Chacl : ParsableCommand {
 		}
 		let isUserImmutable = urlResourceValues.isUserImmutable ?? false
 		let isSystemImmutable = urlResourceValues.isSystemImmutable ?? false
-		if urlResourceValues.isUserImmutable == nil {print("*** WARNING: cannot get user immutable flags on file at path \(path)", to: &mx_stderr)}
-		if urlResourceValues.isSystemImmutable == nil {print("*** WARNING: cannot get system immutable flags on file at path \(path)", to: &mx_stderr)}
+		if urlResourceValues.isUserImmutable == nil {logger.warning("cannot get user immutable flags on file at path \(path)")}
+		if urlResourceValues.isSystemImmutable == nil {logger.warning("cannot get system immutable flags on file at path \(path)")}
 		
 		guard fileResourceType == .directory || fileResourceType == .regular else {
 			if verbose {
@@ -207,7 +220,7 @@ struct Chacl : ParsableCommand {
 				if verbose {print("setting ACLs to file \(path)")}
 				if acl_set_link_np(path, ACL_TYPE_EXTENDED, acl) != 0 {
 //					throw SimpleError(message: "cannot set ACL on file at path \(path) (\(errno))")
-					print("***** ERROR: cannot set ACL on file at path \(path): \(String(cString: strerror(errno)))", to: &mx_stderr)
+					logger.error("cannot set ACL on file at path \(path): \(String(cString: strerror(errno)))")
 				}
 				
 				/* Put the immutable flag back */
@@ -242,7 +255,7 @@ struct Chacl : ParsableCommand {
 			return nil
 		}
 		if let errormsg = errormsg {
-			print("***** ERROR: cannot remove system immutable flag on file at path \(path): \(errormsg). ACL set will probably fail.", to: &mx_stderr)
+			logger.error("cannot remove system immutable flag on file at path \(path): \(errormsg). ACL set will probably fail.")
 		}
 	}
 	

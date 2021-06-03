@@ -7,6 +7,7 @@
 
 import Foundation
 
+import Logging
 import StreamReader
 
 
@@ -14,7 +15,7 @@ import StreamReader
 struct ChaclConfigEntry {
 	
 	/** Parses the given FileHandle. */
-	static func parse(config fh: FileHandle, baseURLForPaths: URL, verbose: Bool) throws -> [ChaclConfigEntry] {
+	static func parse(config fh: FileHandle, baseURLForPaths: URL, logger: Logger) throws -> [ChaclConfigEntry] {
 		var entries = [ChaclConfigEntry]()
 		let simpleStream = FileHandleReader(stream: fh, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, readSizeLimit: nil)
 		while let (lineData, _) = try simpleStream.readLine() {
@@ -81,12 +82,12 @@ struct ChaclConfigEntry {
 			guard FileManager.default.fileExists(atPath: absolutePath) else {
 				throw SimpleError(message: "File does not exist (or do not have permission to read) at path \(absolutePath)")
 			}
-			if verbose && parsedPath != absolutePath {
-				print("path cleanup: \(parsedPath) -> \(absolutePath)")
+			if parsedPath != absolutePath {
+				logger.notice("path cleanup: \(parsedPath) -> \(absolutePath)")
 			}
 			
 			if let idx = entries.firstIndex(where: { $0.absolutePath == absolutePath }) {
-				print("*** warning: entry for path \(absolutePath) found more than once; latest one wins.", to: &mx_stderr)
+				logger.warning("entry for path \(absolutePath) found more than once; latest one wins")
 				entries.remove(at: idx)
 				assert(!entries.contains(where: { $0.absolutePath == absolutePath }))
 			}
