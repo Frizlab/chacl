@@ -17,11 +17,7 @@ struct FileShareEntryConfig {
 	static func parse(config stream: InputStream, baseURLForPaths: URL, verbose: Bool) throws -> [FileShareEntryConfig] {
 		var entries = [FileShareEntryConfig]()
 		let simpleStream = InputStreamReader(stream: stream, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, readSizeLimit: nil)
-		repeat {
-			guard let (lineData, _) = try simpleStream.readLine() else {
-				break /* We've reached the end of the file */
-			}
-			
+		while let (lineData, _) = try simpleStream.readLine() {
 			guard let line = String(data: lineData, encoding: .utf8) else {
 				throw SimpleError(message: "Cannot read one line in text")
 			}
@@ -95,7 +91,7 @@ struct FileShareEntryConfig {
 				assert(!entries.contains(where: { $0.absolutePath == absolutePath }))
 			}
 			entries.append(FileShareEntryConfig(absolutePath: absolutePath, permissions: permissions))
-		} while true
+		}
 		
 		return entries
 	}
