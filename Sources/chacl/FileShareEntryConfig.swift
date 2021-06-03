@@ -13,10 +13,10 @@ import StreamReader
 
 struct FileShareEntryConfig {
 	
-	/** Parses the given config file. If file is "-", will read from stdin. */
-	static func parse(config stream: InputStream, baseURLForPaths: URL, verbose: Bool) throws -> [FileShareEntryConfig] {
+	/** Parses the given FileHandle. */
+	static func parse(config fh: FileHandle, baseURLForPaths: URL, verbose: Bool) throws -> [FileShareEntryConfig] {
 		var entries = [FileShareEntryConfig]()
-		let simpleStream = InputStreamReader(stream: stream, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, readSizeLimit: nil)
+		let simpleStream = FileHandleReader(stream: fh, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, readSizeLimit: nil)
 		while let (lineData, _) = try simpleStream.readLine() {
 			guard let line = String(data: lineData, encoding: .utf8) else {
 				throw SimpleError(message: "Cannot read one line in text")

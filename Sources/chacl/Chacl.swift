@@ -75,14 +75,17 @@ struct Chacl : ParsableCommand {
 		/* Parsing the config */
 		let configs: [URL: ACLConfig]
 		do {
-			guard let stream = InputStream(fileAtPath: configFilePath != "-" ? configFilePath : "/dev/stdin") else {
-				throw SimpleError(message: "Cannot open file")
-			}
+			let fh: FileHandle
 			let baseURLForPaths: URL
-			if configFilePath != "-" {baseURLForPaths = URL(fileURLWithPath: configFilePath).deletingLastPathComponent()}
-			else                     {baseURLForPaths = URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true)}
-			stream.open(); defer {stream.close()}
-			let fileShareConfs = try FileShareEntryConfig.parse(config: stream, baseURLForPaths: baseURLForPaths, verbose: verbose)
+			if configFilePath == "-" {
+				fh = FileHandle.standardInput
+				baseURLForPaths = URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true)
+			} else {
+				/* No need to close the FileHandle, it will be closed on dealloc. */
+				fh = try FileHandle(forReadingFrom: URL(fileURLWithPath: configFilePath))
+				baseURLForPaths = URL(fileURLWithPath: configFilePath).deletingLastPathComponent()
+			}
+			let fileShareConfs = try FileShareEntryConfig.parse(config: fh, baseURLForPaths: baseURLForPaths, verbose: verbose)
 			configs = try Dictionary(grouping: fileShareConfs, by: { URL(fileURLWithPath: $0.absolutePath) })
 				.mapValues{ fileShareConf in
 					guard let fileShareConf = fileShareConf.onlyElement else {
