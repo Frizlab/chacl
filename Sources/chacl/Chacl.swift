@@ -69,11 +69,11 @@ struct Chacl : ParsableCommand {
 			throw SimpleError(message: "Zero or more than one value, or invalid UUID string for attribute kODAttributeTypeGUID for the a user or group; cannot continue.")
 		}
 		
-		let adminACLConf = try ACLConfig(adminACLWithUUID: adminGUID)
-		let everyoneACLConf = try ACLConfig(denyEveryoneExecuteACLWithUUID: everyoneGUID)
+		let adminACLConf = try AclConfig(adminACLWithUUID: adminGUID)
+		let everyoneACLConf = try AclConfig(denyEveryoneExecuteACLWithUUID: everyoneGUID)
 		
 		/* Parsing the config */
-		let configs: [URL: ACLConfig]
+		let configs: [URL: AclConfig]
 		do {
 			let fh: FileHandle
 			let baseURLForPaths: URL
@@ -85,13 +85,13 @@ struct Chacl : ParsableCommand {
 				fh = try FileHandle(forReadingFrom: URL(fileURLWithPath: configFilePath))
 				baseURLForPaths = URL(fileURLWithPath: configFilePath).deletingLastPathComponent()
 			}
-			let fileShareConfs = try FileShareEntryConfig.parse(config: fh, baseURLForPaths: baseURLForPaths, verbose: verbose)
-			configs = try Dictionary(grouping: fileShareConfs, by: { URL(fileURLWithPath: $0.absolutePath) })
-				.mapValues{ fileShareConf in
-					guard let fileShareConf = fileShareConf.onlyElement else {
-						throw SimpleError(message: "Internal logic error.")
+			let aclConf = try ChaclConfigEntry.parse(config: fh, baseURLForPaths: baseURLForPaths, verbose: verbose)
+			configs = try Dictionary(grouping: aclConf, by: { URL(fileURLWithPath: $0.absolutePath) })
+				.mapValues{ confEntry in
+					guard let confEntry = confEntry.onlyElement else {
+						throw SimpleError(message: "Internal logic error (ChaclConfigEntry.parse should have cleaned up double entries for one file).")
 					}
-					return try ACLConfig(fileShareConf: fileShareConf, odNode: odNode)
+					return try AclConfig(chaclConfig: confEntry, odNode: odNode)
 				}
 		}
 		
@@ -131,7 +131,7 @@ struct Chacl : ParsableCommand {
 		}
 	}
 	
-	private func iterateMatchingConfs(url: URL, confs: [URL: ACLConfig], _ block: (_ conf: ACLConfig, _ isRoot: Bool) throws -> Void) rethrows {
+	private func iterateMatchingConfs(url: URL, confs: [URL: AclConfig], _ block: (_ conf: AclConfig, _ isRoot: Bool) throws -> Void) rethrows {
 		var curURL = URL(fileURLWithPath: "/")
 		
 		/* These asserts justify what we do next in the for. */
@@ -143,7 +143,7 @@ struct Chacl : ParsableCommand {
 		}
 	}
 	
-	private func setACLs(on url: URL, whitelist: Set<UUID>, adminACLConfs: [ACLConfig], denyExecuteConf: ACLConfig, aclConfs: [URL: ACLConfig], fileManager fm: FileManager, isRoot: Bool, dryRun: Bool) throws {
+	private func setACLs(on url: URL, whitelist: Set<UUID>, adminACLConfs: [AclConfig], denyExecuteConf: AclConfig, aclConfs: [URL: AclConfig], fileManager fm: FileManager, isRoot: Bool, dryRun: Bool) throws {
 		let path = url.absoluteURL.path
 		let urlResourceValues = try url.resourceValues(forKeys: [.fileResourceTypeKey, .isSystemImmutableKey, .isUserImmutableKey])
 		guard let fileResourceType = urlResourceValues.fileResourceType else {
@@ -307,7 +307,7 @@ struct Chacl : ParsableCommand {
 	
 	/* Must be a class to have a deinit, because we keep refs to acl_t pointers
 	 * and need to free them when we are dealloc’d. */
-	private class ACLConfig {
+	private class AclConfig {
 		
 		/* All from chmod man. There is ACL_SYNCHRONIZE from the headers, don’t
 		 * know what it does. */
@@ -327,8 +327,8 @@ struct Chacl : ParsableCommand {
 			try Self.addEntry(to: &refACLForFile,   isAllowRule: false, forAFolder: false, guid: uuid.guid, perms: [ACL_EXECUTE])
 		}
 		
-		init(fileShareConf: FileShareEntryConfig, odNode: ODNode) throws {
-			let permCount = Int32(fileShareConf.permissions.count)
+		init(chaclConfig: ChaclConfigEntry, odNode: ODNode) throws {
+			let permCount = Int32(chaclConfig.permissions.count)
 			refACLForFile = acl_init(permCount /* This is a minimum; we could put 0 here. */)
 			refACLForFolder = acl_init(permCount /* This is a minimum; we could put 0 here. */)
 			
@@ -337,7 +337,7 @@ struct Chacl : ParsableCommand {
 			let filePermsWO   = [ACL_DELETE, ACL_WRITE_ATTRIBUTES, ACL_WRITE_EXTATTRIBUTES, ACL_WRITE_DATA, ACL_APPEND_DATA]
 			let folderPermsWO = [ACL_DELETE, ACL_WRITE_ATTRIBUTES, ACL_WRITE_EXTATTRIBUTES, ACL_ADD_FILE, ACL_ADD_SUBDIRECTORY, ACL_DELETE_CHILD]
 			
-			for perm in fileShareConf.permissions {
+			for perm in chaclConfig.permissions {
 				let destRecordType: String
 				let destRecordName: String
 				switch perm.destination {

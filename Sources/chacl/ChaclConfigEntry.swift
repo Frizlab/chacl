@@ -1,5 +1,5 @@
 /*
- * FileShareEntryConfig.swift
+ * ChaclConfigEntry.swift
  * chacl
  *
  * Created by François Lamboley on 11/15/17.
@@ -11,11 +11,11 @@ import StreamReader
 
 
 
-struct FileShareEntryConfig {
+struct ChaclConfigEntry {
 	
 	/** Parses the given FileHandle. */
-	static func parse(config fh: FileHandle, baseURLForPaths: URL, verbose: Bool) throws -> [FileShareEntryConfig] {
-		var entries = [FileShareEntryConfig]()
+	static func parse(config fh: FileHandle, baseURLForPaths: URL, verbose: Bool) throws -> [ChaclConfigEntry] {
+		var entries = [ChaclConfigEntry]()
 		let simpleStream = FileHandleReader(stream: fh, bufferSize: 1*1024*1024 /* 1MiB */, bufferSizeIncrement: 1*1024 /* 1KiB */, readSizeLimit: nil)
 		while let (lineData, _) = try simpleStream.readLine() {
 			guard let line = String(data: lineData, encoding: .utf8) else {
@@ -90,7 +90,7 @@ struct FileShareEntryConfig {
 				entries.remove(at: idx)
 				assert(!entries.contains(where: { $0.absolutePath == absolutePath }))
 			}
-			entries.append(FileShareEntryConfig(absolutePath: absolutePath, permissions: permissions))
+			entries.append(ChaclConfigEntry(absolutePath: absolutePath, permissions: permissions))
 		}
 		
 		return entries
