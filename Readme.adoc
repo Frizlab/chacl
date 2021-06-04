@@ -2,3 +2,38 @@
 François Lamboley <fload@me.com>
 
 Set ACL recursively on files and folder from an easy to read configuration (macOS only).
+
+
+== How to Use?
+
+First you have to create a config file which will describe the different ACLs to
+apply to which folders and files.
+
+Then, simply run `chacl --admin-username admin /path/to/config/file`. The admin
+username is required, because ACLs are added for it to be able to access
+everything whatever the configuration file says.
+
+Here is an example config file:
+[source,sh]
+----
+###################################################################
+# File format is as follow:                                       #
+# ([u|g]: user-or-group-name: [r|rw]:)*  :/path/to/file-or-folder #
+#                                                                 #
+# Note: File and folders in this file should have                 #
+# permission 0000 and be owned by the admin user.                 #
+###################################################################
+
+# This gives the user bob.kelso the permission to read and write in his folder.
+u: bob.kelso: rw:  :/Volumes/TheBigRAID/File Sharing/Users/bob.kelso
+
+# Nobody can either read or write in this folder.
+:/Volumes/TheBigRAID/File Sharing/Users/fired.guy
+
+# Public groups. Everybody can read, only the people in the group can write.
+g: staff-all: r:  g:    staff-tech: rw:  :/Volumes/TheBigRAID/File Sharing/Teams/staff-tech
+g: staff-all: r:  g: staff-finance: rw:  :/Volumes/TheBigRAID/File Sharing/Teams/staff-finance
+                  g:     staff-all: rw:  :/Volumes/TheBigRAID/File Sharing/Teams/staff-all
+# Private group. Only the people in the group can read (and write).
+g: staff-finance: rw:  :/Volumes/TheBigRAID/File Sharing/Teams/staff-finance-private
+----

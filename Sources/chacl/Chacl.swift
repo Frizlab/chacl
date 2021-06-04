@@ -337,7 +337,7 @@ struct Chacl : ParsableCommand {
 		init(denyEveryoneExecuteACLWithUUID uuid: UUID) throws {
 			refACLForFolder = nil
 			refACLForFile = acl_init(1)
-			try Self.addEntry(to: &refACLForFile,   isAllowRule: false, forAFolder: false, guid: uuid.guid, perms: [ACL_EXECUTE])
+			try Self.addEntry(to: &refACLForFile, isAllowRule: false, forAFolder: false, guid: uuid.guid, perms: [ACL_EXECUTE])
 		}
 		
 		init(chaclConfig: ChaclConfigEntry, odNode: ODNode) throws {
