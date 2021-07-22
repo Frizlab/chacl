@@ -74,9 +74,11 @@ struct ChaclConfigEntry {
 				case 1: absolutePath = url.absoluteURL.path
 				default:
 					let realpathed = url.deletingLastPathComponent().path
-					guard let realpath = Darwin.realpath(realpathed, nil).flatMap({ String(cString: $0) }) else {
+					guard let realpathC = Darwin.realpath(realpathed, nil) else {
 						throw SimpleError(message: "realpath cannot resolve path \(realpathed)")
 					}
+					defer {free(realpathC)}
+					let realpath = String(cString: realpathC)
 					absolutePath = URL(fileURLWithPath: realpath).appendingPathComponent(url.lastPathComponent).absoluteURL.path
 			}
 			guard FileManager.default.fileExists(atPath: absolutePath) else {
